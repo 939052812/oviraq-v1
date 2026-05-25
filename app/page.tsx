@@ -56,7 +56,7 @@ export default function Home() {
   const [generatedImages, setGeneratedImages] = useState<string[]>([]);
 
   async function analyze() {
-    setAnalyzingStep(0);
+    setAnalyzingStep(1);
     setStage("analyzing");
 
     const res = await fetch("http://45.32.250.250:3001/generate", {
@@ -102,6 +102,8 @@ export default function Home() {
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
   }, []);
+
+  const displayImages = generatedImages.length > 0 ? generatedImages : resultImages;
 
   return (
     <main className="h-screen overflow-hidden bg-[#f7f7f8] p-5 text-black">
@@ -230,7 +232,13 @@ export default function Home() {
           {stage === "analyzing" && <Analyzing step={analyzingStep} />}
           {stage === "schemes" && <Schemes onGenerate={generate} />}
           {stage === "generating" && <Generating />}
-          {stage === "results" && <Results onBack={() => setStage("schemes")} onPreview={setPreview} />}
+          {stage === "results" && (
+            <Results
+              images={displayImages}
+              onBack={() => setStage("schemes")}
+              onPreview={setPreview}
+            />
+          )}
         </section>
       </div>
 
@@ -240,7 +248,7 @@ export default function Home() {
           <button
             onClick={(e) => {
               e.stopPropagation();
-              setPreview((preview + resultImages.length - 1) % resultImages.length);
+              setPreview((preview + displayImages.length - 1) % displayImages.length);
             }}
             className="absolute left-6 rounded-full bg-white/15 px-4 py-3 text-white"
           >
@@ -248,14 +256,14 @@ export default function Home() {
           </button>
           <img
             onClick={(e) => e.stopPropagation()}
-            src={resultImages[preview]}
+            src={displayImages[preview]}
             className="max-h-[85vh] max-w-[90vw] rounded-[28px] object-contain"
             alt=""
           />
           <button
             onClick={(e) => {
               e.stopPropagation();
-              setPreview((preview + 1) % resultImages.length);
+              setPreview((preview + 1) % displayImages.length);
             }}
             className="absolute right-6 rounded-full bg-white/15 px-4 py-3 text-white"
           >
@@ -469,7 +477,15 @@ function Generating() {
   );
 }
 
-function Results({ onBack, onPreview }: { onBack: () => void; onPreview: (i: number) => void }) {
+function Results({
+  images,
+  onBack,
+  onPreview,
+}: {
+  images: string[];
+  onBack: () => void;
+  onPreview: (i: number) => void;
+}) {
   return (
     <div>
       <div className="flex items-start justify-between gap-4">
@@ -499,9 +515,9 @@ function Results({ onBack, onPreview }: { onBack: () => void; onPreview: (i: num
       </div>
 
       <div className="mt-8 grid grid-cols-2 gap-5">
-        {resultImages.map((url, index) => (
+        {images.map((url, index) => (
           <div
-            key={url}
+            key={`${url}-${index}`}
             className="group relative overflow-hidden rounded-[28px] bg-[#f4f4f5] transition-all duration-300 hover:-translate-y-1 hover:shadow-2xl"
           >
             <button
