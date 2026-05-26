@@ -1,13 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-const resultImages = [
-  "https://images.unsplash.com/photo-1523275335684-37898b6baf30?q=80&w=1200&auto=format&fit=crop",
-  "https://images.unsplash.com/photo-1542291026-7eec264c27ff?q=80&w=1200&auto=format&fit=crop",
-  "https://images.unsplash.com/photo-1512436991641-6745cdb1723f?q=80&w=1200&auto=format&fit=crop",
-  "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?q=80&w=1200&auto=format&fit=crop",
-];
+type GeneratedImageItem = { imageUrl: string };
 
 const platformOptions = ["智能匹配", "淘宝", "小红书", "抖音", "拼多多", "亚马逊", "TikTok", "Temu"];
 const languageOptions = [
@@ -54,33 +49,62 @@ export default function Home() {
   const [quality, setQuality] = useState("标准");
   const [quantity, setQuantity] = useState("1 张");
   const [generatedImages, setGeneratedImages] = useState<string[]>([]);
+  const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
+  const [previewUrls, setPreviewUrls] = useState<string[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const urls = uploadedFiles.map((file) => URL.createObjectURL(file));
+    setPreviewUrls(urls);
+    return () => {
+      urls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [uploadedFiles]);
+
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    setUploadedFiles(files.slice(0, 6));
+    e.target.value = "";
+  }
 
   async function analyze() {
+    if (uploadedFiles.length === 0) {
+      alert("请至少上传 1 张商品图");
+      return;
+    }
+
     setAnalyzingStep(1);
     setStage("analyzing");
 
-    const res = await fetch("http://45.32.250.250:3001/generate", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({}),
-    });
+    const formData = new FormData();
+    formData.append("image", uploadedFiles[0]);
+    formData.append("platform", platform);
+    formData.append("imageType", imageType);
+    formData.append("targetLanguage", language);
+    formData.append("count", quantity);
 
-    const data = await res.json();
+    try {
+      const res = await fetch("http://45.32.250.250:3001/auto-generate-product", {
+        method: "POST",
+        body: formData,
+      });
 
-    if (data.success && data.image) {
-      setGeneratedImages([`data:image/png;base64,${data.image}`]);
-      setStage("results");
-    } else {
-      console.error(data.error);
+      const data = await res.json();
+
+      if (data.images && Array.isArray(data.images)) {
+        const urls = (data.images as GeneratedImageItem[]).map((item) => item.imageUrl);
+        setGeneratedImages(urls);
+        setStage("results");
+      } else {
+        console.error(data.error ?? data);
+        alert(typeof data.error === "string" ? data.error : "生成失败");
+        setStage("idle");
+      }
+    } catch (error) {
+      console.error(error);
+      alert("请求失败，请稍后重试");
       setStage("idle");
     }
-  }
-
-  function generate() {
-    setStage("generating");
-    setTimeout(() => setStage("results"), 2500);
   }
 
   useEffect(() => {
@@ -103,8 +127,6 @@ export default function Home() {
     return () => window.removeEventListener("keydown", close);
   }, []);
 
-  const displayImages = generatedImages.length > 0 ? generatedImages : resultImages;
-
   return (
     <main className="h-screen overflow-hidden bg-[#f7f7f8] p-5 text-black">
       <div className="flex h-full gap-5">
@@ -124,13 +146,40 @@ export default function Home() {
           <div className="mb-4 rounded-[22px] border border-black/8 p-3.5">
             <div className="mb-2.5 flex justify-between">
               <h2 className="text-sm font-semibold">产品图</h2>
-              <span className="text-xs text-black/35">0/6</span>
+              <span className="text-xs text-black/35">{uploadedFiles.length}/6</span>
             </div>
-            <div className="flex h-32 flex-col items-center justify-center rounded-[18px] border border-dashed border-black/10 bg-[#fafafa] text-center transition-colors hover:bg-white">
-              <div className="mb-1.5 text-3xl text-black/25">+</div>
-              <p className="text-sm text-black/45">上传清晰的产品图片</p>
-              <p className="mt-0.5 text-xs text-black/30">建议只上传必要角度或 SKU 图</p>
-            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={handleFileChange}
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="flex min-h-32 w-full flex-col items-center justify-center rounded-[18px] border border-dashed border-black/10 bg-[#fafafa] text-center transition-colors hover:bg-white"
+            >
+              {uploadedFiles.length === 0 ? (
+                <>
+                  <div className="mb-1.5 text-3xl text-black/25">+</div>
+                  <p className="text-sm text-black/45">上传清晰的产品图片</p>
+                  <p className="mt-0.5 text-xs text-black/30">建议只上传必要角度或 SKU 图</p>
+                </>
+              ) : (
+                <div className="grid w-full grid-cols-3 gap-2 p-3">
+                  {previewUrls.map((url, index) => (
+                    <img
+                      key={`${url}-${index}`}
+                      src={url}
+                      alt={`商品图 ${index + 1}`}
+                      className="aspect-square w-full rounded-[12px] object-cover"
+                    />
+                  ))}
+                </div>
+              )}
+            </button>
           </div>
 
           <div className="mb-4 grid grid-cols-2 rounded-full bg-[#f1f1f2] p-0.5">
@@ -230,25 +279,25 @@ export default function Home() {
         <section className="min-w-0 flex-1 overflow-y-auto rounded-[30px] bg-white p-8 shadow-sm">
           {stage === "idle" && <EmptyState imageType={imageType} />}
           {stage === "analyzing" && <Analyzing step={analyzingStep} />}
-          {stage === "schemes" && <Schemes onGenerate={generate} />}
+          {stage === "schemes" && <Schemes onGenerate={() => setStage("generating")} />}
           {stage === "generating" && <Generating />}
           {stage === "results" && (
             <Results
-              images={displayImages}
-              onBack={() => setStage("schemes")}
+              images={generatedImages}
+              onBack={() => setStage("idle")}
               onPreview={setPreview}
             />
           )}
         </section>
       </div>
 
-      {preview !== null && (
+      {preview !== null && generatedImages.length > 0 && (
         <div onClick={() => setPreview(null)} className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md">
           <button className="absolute right-6 top-6 rounded-full bg-white/15 px-4 py-2 text-white">×</button>
           <button
             onClick={(e) => {
               e.stopPropagation();
-              setPreview((preview + displayImages.length - 1) % displayImages.length);
+              setPreview((preview + generatedImages.length - 1) % generatedImages.length);
             }}
             className="absolute left-6 rounded-full bg-white/15 px-4 py-3 text-white"
           >
@@ -256,14 +305,14 @@ export default function Home() {
           </button>
           <img
             onClick={(e) => e.stopPropagation()}
-            src={displayImages[preview]}
+            src={generatedImages[preview]}
             className="max-h-[85vh] max-w-[90vw] rounded-[28px] object-contain"
             alt=""
           />
           <button
             onClick={(e) => {
               e.stopPropagation();
-              setPreview((preview + 1) % displayImages.length);
+              setPreview((preview + 1) % generatedImages.length);
             }}
             className="absolute right-6 rounded-full bg-white/15 px-4 py-3 text-white"
           >
