@@ -92,26 +92,43 @@ export default function Home() {
   const [quantity, setQuantity] = useState("1 张");
   const [productInfo, setProductInfo] = useState("");
   const [generatedImages, setGeneratedImages] = useState<string[]>([]);
-  const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
+  const [productImages, setProductImages] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const urls = uploadedFiles.map((file) => URL.createObjectURL(file));
+    const urls = productImages.map((file) => URL.createObjectURL(file));
     setPreviewUrls(urls);
     return () => {
       urls.forEach((url) => URL.revokeObjectURL(url));
     };
-  }, [uploadedFiles]);
+  }, [productImages]);
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(e.target.files ?? []);
-    setUploadedFiles(files.slice(0, 6));
+    const selected = Array.from(e.target.files ?? []);
     e.target.value = "";
+    if (selected.length === 0) return;
+
+    setProductImages((prev) => {
+      const remaining = 6 - prev.length;
+      if (remaining <= 0) {
+        alert("最多上传 6 张商品图");
+        return prev;
+      }
+      const toAdd = selected.slice(0, remaining);
+      if (selected.length > remaining) {
+        alert("最多上传 6 张商品图");
+      }
+      return [...prev, ...toAdd];
+    });
+  }
+
+  function removeProductImage(index: number) {
+    setProductImages((prev) => prev.filter((_, i) => i !== index));
   }
 
   async function analyze() {
-    if (uploadedFiles.length === 0) {
+    if (productImages.length === 0) {
       alert("请至少上传 1 张商品图");
       return;
     }
@@ -124,7 +141,7 @@ export default function Home() {
     const qualityValue = mapQuality(quality);
 
     const formData = new FormData();
-    formData.append("image", uploadedFiles[0]);
+    formData.append("image", productImages[0]);
     formData.append("imageType", imageType);
     formData.append("platform", platform);
     formData.append("productInfo", productInfo);
@@ -207,7 +224,7 @@ export default function Home() {
           <div className="mb-4 rounded-[22px] border border-black/8 p-3.5">
             <div className="mb-2.5 flex justify-between">
               <h2 className="text-sm font-semibold">产品图</h2>
-              <span className="text-xs text-black/35">{uploadedFiles.length}/6</span>
+              <span className="text-xs text-black/35">{productImages.length}/6</span>
             </div>
             <input
               ref={fileInputRef}
@@ -217,30 +234,54 @@ export default function Home() {
               className="hidden"
               onChange={handleFileChange}
             />
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="flex min-h-32 w-full flex-col items-center justify-center rounded-[18px] border border-dashed border-black/10 bg-[#fafafa] text-center transition-colors hover:bg-white"
-            >
-              {uploadedFiles.length === 0 ? (
-                <>
-                  <div className="mb-1.5 text-3xl text-black/25">+</div>
-                  <p className="text-sm text-black/45">上传清晰的产品图片</p>
-                  <p className="mt-0.5 text-xs text-black/30">建议只上传必要角度或 SKU 图</p>
-                </>
-              ) : (
-                <div className="grid w-full grid-cols-3 gap-2 p-3">
+            {productImages.length === 0 ? (
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="flex min-h-32 w-full flex-col items-center justify-center rounded-[18px] border border-dashed border-black/10 bg-[#fafafa] text-center transition-colors hover:bg-white"
+              >
+                <div className="mb-1.5 text-3xl text-black/25">+</div>
+                <p className="text-sm text-black/45">上传清晰的产品图片</p>
+                <p className="mt-0.5 text-xs text-black/30">建议只上传必要角度或 SKU 图</p>
+              </button>
+            ) : (
+              <div className="rounded-[18px] border border-dashed border-black/10 bg-[#fafafa] p-3">
+                <div className="grid grid-cols-3 gap-2">
                   {previewUrls.map((url, index) => (
-                    <img
-                      key={`${url}-${index}`}
-                      src={url}
-                      alt={`商品图 ${index + 1}`}
-                      className="aspect-square w-full rounded-[12px] object-cover"
-                    />
+                    <div
+                      key={`${productImages[index]?.name}-${productImages[index]?.lastModified}-${index}`}
+                      className="relative aspect-square"
+                    >
+                      <img
+                        src={url}
+                        alt={`商品图 ${index + 1}`}
+                        className="h-full w-full rounded-[12px] object-cover"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeProductImage(index)}
+                        className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-xs text-white hover:bg-black/80"
+                        aria-label={`删除商品图 ${index + 1}`}
+                      >
+                        ×
+                      </button>
+                      <span className="absolute bottom-1 left-1 rounded-[6px] bg-black/55 px-1.5 py-0.5 text-[10px] text-white">
+                        {index === 0 ? "主参考" : "参考图"}
+                      </span>
+                    </div>
                   ))}
+                  {productImages.length < 6 && (
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="flex aspect-square w-full flex-col items-center justify-center rounded-[12px] border border-dashed border-black/15 bg-white text-black/30 transition-colors hover:border-black/25 hover:text-black/45"
+                    >
+                      <span className="text-2xl">+</span>
+                    </button>
+                  )}
                 </div>
-              )}
-            </button>
+              </div>
+            )}
           </div>
 
           <div className="mb-4 grid grid-cols-2 rounded-full bg-[#f1f1f2] p-0.5">
