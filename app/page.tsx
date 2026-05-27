@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 type GeneratedImageItem = { imageUrl?: string } | string;
+type SelectOption = { label: string; value: string };
 
 const IMAGE_PROVIDER = "xai";
 const IMAGE_MODEL = "grok-imagine-image-quality";
@@ -10,20 +11,20 @@ const MODEL_LABEL = "Grok pro";
 const modelOptions = [MODEL_LABEL];
 
 const platformOptions = ["智能匹配", "淘宝", "小红书", "抖音", "拼多多", "亚马逊", "TikTok", "Temu"];
-const languageOptions = [
-  "无文字(纯视觉)",
-  "中文(简体)",
-  "中文(繁体)",
-  "英语",
-  "日语",
-  "韩语",
-  "德语",
-  "法语",
-  "意大利语",
-  "阿拉伯语",
-  "俄语",
-  "泰语",
-  "印尼语",
+const languageOptions: SelectOption[] = [
+  { label: "无文字(纯视觉)", value: "no_text" },
+  { label: "中文(简体)", value: "zh" },
+  { label: "中文(繁体)", value: "zh-Hant" },
+  { label: "英语", value: "en" },
+  { label: "日语", value: "ja" },
+  { label: "韩语", value: "ko" },
+  { label: "德语", value: "de" },
+  { label: "法语", value: "fr" },
+  { label: "意大利语", value: "it" },
+  { label: "阿拉伯语", value: "ar" },
+  { label: "俄语", value: "ru" },
+  { label: "泰语", value: "th" },
+  { label: "印尼语", value: "id" },
 ];
 const ratioOptions = [
   "1:1 正方形",
@@ -40,10 +41,27 @@ const ratioOptions = [
 const qualityOptions = ["标准", "高清", "超清"];
 const quantityOptions = ["1 张", "2 张", "3 张", "4 张", "5 张", "6 张", "7 张", "8 张", "9 张", "10 张", "11 张", "12 张"];
 
+function parseAspectRatio(ratioLabel: string): string {
+  const match = ratioLabel.match(/^[\d:]+/);
+  return match ? match[0] : "1:1";
+}
+
+function mapQuality(value: string): string {
+  if (value === "高清") return "high";
+  if (value === "超清") return "ultra";
+  return "standard";
+}
+
 function parseCount(quantityLabel: string): number {
   const match = quantityLabel.match(/\d+/);
   const count = match ? Number.parseInt(match[0], 10) : 1;
   return Math.min(12, Math.max(1, count));
+}
+
+function normalizeSelectOptions(options: string[] | SelectOption[]): SelectOption[] {
+  return options.map((option) =>
+    typeof option === "string" ? { label: option, value: option } : option
+  );
 }
 
 function extractImageUrls(data: {
@@ -67,11 +85,12 @@ export default function Home() {
   const [imageType, setImageType] = useState("main");
   const [openSelectId, setOpenSelectId] = useState<string | null>(null);
   const [platform, setPlatform] = useState("智能匹配");
-  const [language, setLanguage] = useState("无文字(纯视觉)");
+  const [language, setLanguage] = useState("no_text");
   const [model, setModel] = useState(MODEL_LABEL);
   const [selectedRatio, setSelectedRatio] = useState("1:1 正方形");
   const [quality, setQuality] = useState("标准");
   const [quantity, setQuantity] = useState("1 张");
+  const [productInfo, setProductInfo] = useState("");
   const [generatedImages, setGeneratedImages] = useState<string[]>([]);
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
@@ -101,15 +120,29 @@ export default function Home() {
     setStage("analyzing");
 
     const count = parseCount(quantity);
+    const aspectRatio = parseAspectRatio(selectedRatio);
+    const qualityValue = mapQuality(quality);
 
     const formData = new FormData();
     formData.append("image", uploadedFiles[0]);
-    formData.append("platform", platform);
     formData.append("imageType", imageType);
+    formData.append("platform", platform);
+    formData.append("productInfo", productInfo);
     formData.append("targetLanguage", language);
     formData.append("provider", IMAGE_PROVIDER);
     formData.append("model", IMAGE_MODEL);
+    formData.append("aspectRatio", aspectRatio);
+    formData.append("quality", qualityValue);
     formData.append("count", String(count));
+
+    console.log("[Oviraq Frontend Submit]");
+    console.log("imageType:", imageType);
+    console.log("platform:", platform);
+    console.log("targetLanguage:", language);
+    console.log("model:", IMAGE_MODEL);
+    console.log("aspectRatio:", aspectRatio);
+    console.log("quality:", qualityValue);
+    console.log("count:", count);
 
     try {
       const res = await fetch("http://45.32.250.250:3001/auto-generate-product", {
@@ -240,6 +273,8 @@ export default function Home() {
             <textarea
               className="h-28 w-full resize-none rounded-[18px] border border-black/8 bg-[#fafafa] p-3.5 text-sm outline-none transition-colors placeholder:text-black/30 hover:bg-white focus:border-black/25 focus:bg-white"
               placeholder="建议输入产品名称、卖点、目标人群、功能介绍、使用场景、其他要求..."
+              value={productInfo}
+              onChange={(e) => setProductInfo(e.target.value)}
             />
           </label>
 
@@ -370,12 +405,15 @@ function CustomSelect({
   id: string;
   label: string;
   value: string;
-  options: string[];
+  options: string[] | SelectOption[];
   onChange: (value: string) => void;
   openId: string | null;
   onOpenChange: (id: string | null) => void;
 }) {
   const isOpen = openId === id;
+  const normalizedOptions = normalizeSelectOptions(options);
+  const selectedOption =
+    normalizedOptions.find((option) => option.value === value) ?? normalizedOptions[0];
 
   return (
     <div className="relative mb-3">
@@ -385,7 +423,7 @@ function CustomSelect({
         onClick={() => onOpenChange(isOpen ? null : id)}
         className="flex h-10 w-full items-center justify-between rounded-[14px] border border-black/8 bg-[#f7f7f8] px-3 text-xs transition hover:bg-white"
       >
-        <span className="truncate">{value}</span>
+        <span className="truncate">{selectedOption.label}</span>
         <span className={`ml-2 shrink-0 text-black/45 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path
@@ -405,20 +443,20 @@ function CustomSelect({
             : "pointer-events-none translate-y-1 scale-[0.98] opacity-0"
         }`}
       >
-        {options.map((item) => (
+        {normalizedOptions.map((option) => (
           <button
-            key={item}
+            key={option.value}
             type="button"
             onClick={() => {
-              onChange(item);
+              onChange(option.value);
               onOpenChange(null);
             }}
             className={`flex w-full items-center gap-2 rounded-[12px] px-3 py-2.5 text-left text-xs hover:bg-[#f4f4f5] ${
-              value === item ? "bg-[#f4f4f5]" : ""
+              value === option.value ? "bg-[#f4f4f5]" : ""
             }`}
           >
-            <span className="w-3.5 shrink-0 text-center">{value === item ? "✓" : ""}</span>
-            <span>{item}</span>
+            <span className="w-3.5 shrink-0 text-center">{value === option.value ? "✓" : ""}</span>
+            <span>{option.label}</span>
           </button>
         ))}
       </div>
