@@ -2,7 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 
-type GeneratedImageItem = { imageUrl: string };
+type GeneratedImageItem = { imageUrl?: string } | string;
+
+const IMAGE_PROVIDER = "xai";
+const IMAGE_MODEL = "grok-imagine-image-quality";
+const MODEL_LABEL = "Grok pro";
+const modelOptions = [MODEL_LABEL];
 
 const platformOptions = ["智能匹配", "淘宝", "小红书", "抖音", "拼多多", "亚马逊", "TikTok", "Temu"];
 const languageOptions = [
@@ -20,7 +25,6 @@ const languageOptions = [
   "泰语",
   "印尼语",
 ];
-const modelOptions = ["智能推荐", "GPT Image 2"];
 const ratioOptions = [
   "1:1 正方形",
   "2:3 竖版",
@@ -36,6 +40,26 @@ const ratioOptions = [
 const qualityOptions = ["标准", "高清", "超清"];
 const quantityOptions = ["1 张", "2 张", "3 张", "4 张", "5 张", "6 张", "7 张", "8 张", "9 张", "10 张", "11 张", "12 张"];
 
+function parseCount(quantityLabel: string): number {
+  const match = quantityLabel.match(/\d+/);
+  const count = match ? Number.parseInt(match[0], 10) : 1;
+  return Math.min(12, Math.max(1, count));
+}
+
+function extractImageUrls(data: {
+  images?: GeneratedImageItem[];
+  imageUrl?: string;
+}): string[] {
+  if (data.images && Array.isArray(data.images)) {
+    const urls = data.images
+      .map((item) => (typeof item === "string" ? item : item.imageUrl))
+      .filter((url): url is string => Boolean(url));
+    if (urls.length > 0) return urls;
+  }
+  if (data.imageUrl) return [data.imageUrl];
+  return [];
+}
+
 export default function Home() {
   const [stage, setStage] = useState<"idle" | "analyzing" | "schemes" | "generating" | "results">("idle");
   const [preview, setPreview] = useState<number | null>(null);
@@ -44,7 +68,7 @@ export default function Home() {
   const [openSelectId, setOpenSelectId] = useState<string | null>(null);
   const [platform, setPlatform] = useState("智能匹配");
   const [language, setLanguage] = useState("无文字(纯视觉)");
-  const [model, setModel] = useState("智能推荐");
+  const [model, setModel] = useState(MODEL_LABEL);
   const [selectedRatio, setSelectedRatio] = useState("1:1 正方形");
   const [quality, setQuality] = useState("标准");
   const [quantity, setQuantity] = useState("1 张");
@@ -76,12 +100,16 @@ export default function Home() {
     setAnalyzingStep(1);
     setStage("analyzing");
 
+    const count = parseCount(quantity);
+
     const formData = new FormData();
     formData.append("image", uploadedFiles[0]);
     formData.append("platform", platform);
     formData.append("imageType", imageType);
     formData.append("targetLanguage", language);
-    formData.append("count", quantity);
+    formData.append("provider", IMAGE_PROVIDER);
+    formData.append("model", IMAGE_MODEL);
+    formData.append("count", String(count));
 
     try {
       const res = await fetch("http://45.32.250.250:3001/auto-generate-product", {
@@ -90,9 +118,9 @@ export default function Home() {
       });
 
       const data = await res.json();
+      const urls = extractImageUrls(data);
 
-      if (data.images && Array.isArray(data.images)) {
-        const urls = (data.images as GeneratedImageItem[]).map((item) => item.imageUrl);
+      if (urls.length > 0) {
         setGeneratedImages(urls);
         setStage("results");
       } else {
@@ -284,6 +312,7 @@ export default function Home() {
           {stage === "results" && (
             <Results
               images={generatedImages}
+              modelName={MODEL_LABEL}
               onBack={() => setStage("idle")}
               onPreview={setPreview}
             />
@@ -528,10 +557,12 @@ function Generating() {
 
 function Results({
   images,
+  modelName,
   onBack,
   onPreview,
 }: {
   images: string[];
+  modelName: string;
   onBack: () => void;
   onPreview: (i: number) => void;
 }) {
@@ -543,8 +574,8 @@ function Results({
           <h2 className="mt-2 text-3xl font-semibold">商业视觉生成结果</h2>
           <div className="mt-4 flex flex-wrap gap-2">
             {[
-              "已生成 4 张",
-              "模型 GPT Image",
+              `已生成 ${images.length} 张`,
+              `模型 ${modelName}`,
               "平台 淘宝",
               "尺寸 1:1",
               "耗时 12 秒",
