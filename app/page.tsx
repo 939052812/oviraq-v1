@@ -46,6 +46,14 @@ function parseAspectRatio(ratioLabel: string): string {
   return match ? match[0] : "1:1";
 }
 
+function getResultAspectClass(aspectRatio: string): string {
+  if (aspectRatio === "3:4") return "aspect-[3/4]";
+  if (aspectRatio === "4:3") return "aspect-[4/3]";
+  if (aspectRatio === "9:16") return "aspect-[9/16]";
+  if (aspectRatio === "16:9") return "aspect-[16/9]";
+  return "aspect-square";
+}
+
 function mapQuality(value: string): string {
   if (value === "高清") return "high";
   if (value === "超清") return "ultra";
@@ -62,6 +70,46 @@ function normalizeSelectOptions(options: string[] | SelectOption[]): SelectOptio
   return options.map((option) =>
     typeof option === "string" ? { label: option, value: option } : option
   );
+}
+
+const IMAGE_USAGE_DESCRIPTIONS: Record<string, string> = {
+  主图: "适合作为商品首图，突出主体、质感与点击率。",
+  场景图: "适合展示商品使用环境，强化生活方式和购买想象。",
+  使用场景: "适合展示目标人群在真实场景中的使用感。",
+  卖点图: "适合承接核心卖点、功能利益点和视觉记忆点。",
+  细节图: "适合展示材质、纹理、工艺、图案和局部细节。",
+  氛围图: "适合用于详情页过渡、社媒种草或店铺装修。",
+};
+
+const IMAGE_USAGE_TEMPLATES: Record<number, string[]> = {
+  1: ["主图"],
+  2: ["主图", "场景图"],
+  3: ["主图", "场景图", "细节图"],
+  4: ["主图", "场景图", "卖点图", "细节图"],
+  5: ["主图", "场景图", "使用场景", "卖点图", "细节图"],
+  6: ["主图", "场景图", "使用场景", "卖点图", "细节图", "氛围图"],
+};
+
+type ImageUsagePlanItem = {
+  indexLabel: string;
+  usage: string;
+  description: string;
+};
+
+function getImageUsagePlan(total: number): ImageUsagePlanItem[] {
+  const count = Math.max(1, Math.min(total, 12));
+  const template = IMAGE_USAGE_TEMPLATES[Math.min(count, 6)] ?? IMAGE_USAGE_TEMPLATES[6];
+  const usages: string[] = [];
+
+  for (let i = 0; i < count; i += 1) {
+    usages.push(i < template.length ? template[i] : "氛围图");
+  }
+
+  return usages.map((usage, index) => ({
+    indexLabel: `#${String(index + 1).padStart(2, "0")}`,
+    usage,
+    description: IMAGE_USAGE_DESCRIPTIONS[usage] ?? "",
+  }));
 }
 
 function extractImageUrls(data: {
@@ -390,6 +438,7 @@ export default function Home() {
               images={generatedImages}
               generatedImages={generatedImages}
               modelName={MODEL_LABEL}
+              aspectRatio={parseAspectRatio(selectedRatio)}
               onBack={() => setStage("idle")}
               onPreview={setPreview}
             />
@@ -635,22 +684,127 @@ function Generating() {
   );
 }
 
+function resolveResultImages({
+  images,
+  generatedImages,
+  imageUrls,
+  imageUrl,
+}: {
+  images?: string[];
+  generatedImages?: string[];
+  imageUrls?: string[];
+  imageUrl?: string;
+}): string[] {
+  if (images && images.length > 0) return images;
+  if (generatedImages && generatedImages.length > 0) return generatedImages;
+  if (imageUrls && imageUrls.length > 0) return imageUrls;
+  if (imageUrl) return [imageUrl];
+  return [];
+}
+
+function ResultImageCard({
+  url,
+  index,
+  planItem,
+  aspectClass,
+  isPrimary,
+  onPreview,
+}: {
+  url: string;
+  index: number;
+  planItem: ImageUsagePlanItem;
+  aspectClass: string;
+  isPrimary?: boolean;
+  onPreview: (index: number) => void;
+}) {
+  return (
+    <article className="w-full overflow-hidden rounded-[20px] border border-black/8 bg-white shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg">
+      <div className="border-b border-black/6 px-3 py-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold tracking-wide text-black">{planItem.indexLabel}</span>
+          <span
+            className={`rounded-full px-2 py-0.5 text-[10px] font-medium text-white ${
+              isPrimary ? "bg-black ring-1 ring-black/15" : "bg-black/85"
+            }`}
+          >
+            {planItem.usage}
+          </span>
+        </div>
+        <p className="mt-1 line-clamp-2 text-xs leading-snug text-black/50">{planItem.description}</p>
+      </div>
+
+      <div className="p-3 pt-2">
+        <div
+          className={`group relative w-full max-h-[420px] overflow-hidden rounded-2xl bg-neutral-50 ${aspectClass}`}
+        >
+          <button
+            type="button"
+            onClick={() => onPreview(index)}
+            className="block h-full w-full cursor-zoom-in text-left"
+          >
+            <img
+              src={url}
+              alt={`${planItem.usage} ${planItem.indexLabel}`}
+              className="h-full w-full object-contain transition duration-300 group-hover:scale-[1.02]"
+            />
+          </button>
+
+          <button
+            type="button"
+            onClick={(event) => event.stopPropagation()}
+            className="absolute right-2 top-2 z-10 rounded-full bg-black/70 px-2.5 py-1 text-[10px] text-white transition hover:bg-black"
+          >
+            重新生成
+          </button>
+
+          <div className="absolute bottom-2 right-2 z-10 flex gap-1.5">
+            <button
+              type="button"
+              onClick={(event) => event.stopPropagation()}
+              className="rounded-full bg-black/70 px-2.5 py-1 text-[10px] font-medium text-white transition hover:bg-black"
+            >
+              下载
+            </button>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                onPreview(index);
+              }}
+              className="rounded-full bg-black/70 px-2.5 py-1 text-[10px] font-medium text-white transition hover:bg-black"
+            >
+              放大
+            </button>
+          </div>
+        </div>
+      </div>
+    </article>
+  );
+}
+
 function Results({
   images,
   generatedImages,
   imageUrls,
+  imageUrl,
   modelName,
+  aspectRatio,
   onBack,
   onPreview,
 }: {
-  images: string[];
+  images?: string[];
   generatedImages?: string[];
   imageUrls?: string[];
+  imageUrl?: string;
   modelName: string;
+  aspectRatio: string;
   onBack: () => void;
   onPreview: (i: number) => void;
 }) {
-  const actualImageCount = images?.length || generatedImages?.length || imageUrls?.length || 1;
+  const displayImages = resolveResultImages({ images, generatedImages, imageUrls, imageUrl });
+  const actualImageCount = displayImages.length || 1;
+  const usagePlan = getImageUsagePlan(displayImages.length || 1);
+  const aspectClass = getResultAspectClass(aspectRatio);
 
   return (
     <div>
@@ -682,64 +836,25 @@ function Results({
         <button className="rounded-full bg-black px-5 py-3 text-sm text-white">再次生成</button>
       </div>
 
-      <div className="mt-8 grid grid-cols-2 gap-5">
-        {images.map((url, index) => (
-          <div
-            key={`${url}-${index}`}
-            className="group relative overflow-hidden rounded-[28px] bg-[#f4f4f5] transition-all duration-300 hover:-translate-y-1 hover:shadow-2xl"
-          >
-            <button
-              type="button"
-              onClick={() => onPreview(index)}
-              className="block w-full cursor-zoom-in text-left"
-            >
-              <img
-                src={url}
-                alt={`商业视觉 ${index + 1}`}
-                className="h-auto w-full transition duration-500 group-hover:scale-[1.02]"
+      <div className="mt-8 max-w-6xl">
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
+          {displayImages.map((url, index) => {
+            const planItem = usagePlan[index];
+            if (!planItem) return null;
+
+            return (
+              <ResultImageCard
+                key={`${url}-${index}`}
+                url={url}
+                index={index}
+                planItem={planItem}
+                aspectClass={aspectClass}
+                isPrimary={index === 0}
+                onPreview={onPreview}
               />
-            </button>
-
-            <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/0 via-black/0 to-black/10" />
-
-            <button
-              type="button"
-              onClick={(event) => event.stopPropagation()}
-              className="absolute right-4 top-4 z-10 rounded-full bg-black px-4 py-2 text-xs text-white opacity-60 transition hover:opacity-80 group-hover:opacity-100"
-            >
-              重新生成
-            </button>
-
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 opacity-0 transition duration-300 group-hover:pointer-events-auto group-hover:opacity-100">
-              <div className="bg-gradient-to-t from-black/70 to-transparent px-4 pb-4 pt-12">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium tracking-wide text-white/90">
-                    #{String(index + 1).padStart(2, "0")}
-                  </span>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={(event) => event.stopPropagation()}
-                      className="h-9 rounded-full bg-black/45 px-3.5 text-xs font-medium text-white transition duration-300 hover:bg-white hover:text-black"
-                    >
-                      下载
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onPreview(index);
-                      }}
-                      className="h-9 rounded-full bg-black/45 px-3.5 text-xs font-medium text-white transition duration-300 hover:bg-white hover:text-black"
-                    >
-                      放大
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        ))}
+            );
+          })}
+        </div>
       </div>
 
       <button onClick={onBack} className="mt-8 h-12 w-full rounded-full border border-black/10 text-sm">
