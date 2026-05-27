@@ -312,6 +312,7 @@ export default function Home() {
           {stage === "results" && (
             <Results
               images={generatedImages}
+              generatedImages={generatedImages}
               modelName={MODEL_LABEL}
               onBack={() => setStage("idle")}
               onPreview={setPreview}
@@ -557,15 +558,21 @@ function Generating() {
 
 function Results({
   images,
+  generatedImages,
+  imageUrls,
   modelName,
   onBack,
   onPreview,
 }: {
   images: string[];
+  generatedImages?: string[];
+  imageUrls?: string[];
   modelName: string;
   onBack: () => void;
   onPreview: (i: number) => void;
 }) {
+  const actualImageCount = images?.length || generatedImages?.length || imageUrls?.length || 1;
+
   return (
     <div>
       <div className="flex items-start justify-between gap-4">
@@ -574,7 +581,7 @@ function Results({
           <h2 className="mt-2 text-3xl font-semibold">商业视觉生成结果</h2>
           <div className="mt-4 flex flex-wrap gap-2">
             {[
-              `已生成 ${images.length} 张`,
+              `已生成 ${actualImageCount} 张`,
               `模型 ${modelName}`,
               "平台 淘宝",
               "尺寸 1:1",
@@ -589,7 +596,9 @@ function Results({
               </span>
             ))}
           </div>
-          <p className="mt-3 text-black/45">已生成 4 张符合平台策略的商业视觉内容</p>
+          <p className="mt-3 text-black/45">
+            已生成 {actualImageCount} 张符合平台策略的商业视觉内容
+          </p>
         </div>
         <button className="rounded-full bg-black px-5 py-3 text-sm text-white">再次生成</button>
       </div>
