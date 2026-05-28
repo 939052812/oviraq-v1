@@ -805,9 +805,10 @@ function Results({
   const actualImageCount = displayImages.length || 1;
   const usagePlan = getImageUsagePlan(displayImages.length || 1);
   const aspectClass = getResultAspectClass(aspectRatio);
+  const isSingleResult = displayImages.length === 1;
 
   return (
-    <div>
+    <div className="mx-auto max-w-6xl">
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-sm text-black/35">Oviraq AI · 生成结果</p>
@@ -817,7 +818,7 @@ function Results({
               `已生成 ${actualImageCount} 张`,
               `模型 ${modelName}`,
               "平台 淘宝",
-              "尺寸 1:1",
+              `尺寸 ${aspectRatio}`,
               "耗时 12 秒",
               "消耗 4 积分",
             ].map((item) => (
@@ -833,11 +834,17 @@ function Results({
             已生成 {actualImageCount} 张符合平台策略的商业视觉内容
           </p>
         </div>
-        <button className="rounded-full bg-black px-5 py-3 text-sm text-white">再次生成</button>
+        <button className="shrink-0 rounded-full bg-black px-5 py-3 text-sm text-white">再次生成</button>
       </div>
 
-      <div className="mt-8 max-w-6xl">
-        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
+      <div className={isSingleResult ? "mt-8 max-w-[520px]" : "mt-8"}>
+        <div
+          className={
+            isSingleResult
+              ? "grid grid-cols-1 gap-5"
+              : "grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3"
+          }
+        >
           {displayImages.map((url, index) => {
             const planItem = usagePlan[index];
             if (!planItem) return null;
@@ -857,7 +864,11 @@ function Results({
         </div>
       </div>
 
-      <button onClick={onBack} className="mt-8 h-12 w-full rounded-full border border-black/10 text-sm">
+      <button
+        type="button"
+        onClick={onBack}
+        className="mt-8 inline-flex h-12 w-auto max-w-[240px] items-center justify-center rounded-full border border-black/10 px-8 text-sm"
+      >
         返回视觉方案
       </button>
     </div>
