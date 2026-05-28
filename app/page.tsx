@@ -189,6 +189,9 @@ export default function Home() {
     const qualityValue = mapQuality(quality);
 
     const formData = new FormData();
+    productImages.forEach((file) => {
+      formData.append("images", file);
+    });
     formData.append("image", productImages[0]);
     formData.append("imageType", imageType);
     formData.append("platform", platform);
