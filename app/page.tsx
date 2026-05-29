@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 type GeneratedImageItem = { imageUrl?: string } | string;
 type SelectOption = { label: string; value: string };
@@ -1163,6 +1163,11 @@ export default function Home() {
           {stage === "idle" && analysisPreview && (
             <ProductAnalysisCard
               analysis={analysisPreview}
+              imageType={imageType}
+              platform={platform}
+              selectedRatio={selectedRatio}
+              quantity={quantity}
+              model={model}
               isGenerating={isGenerating}
               onReAnalyze={handleReAnalyze}
               onConfirmGenerate={handleGenerateImages}
@@ -1218,74 +1223,150 @@ export default function Home() {
   );
 }
 
+function DirectorSectionCard({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="rounded-[22px] border border-black/8 bg-[#fafafa] p-5">
+      <h3 className="text-sm font-semibold tracking-wide text-black">{title}</h3>
+      <div className="mt-4">{children}</div>
+    </div>
+  );
+}
+
+function DirectorInfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="text-sm leading-7">
+      <span className="font-medium text-black">{label}：</span>
+      <span className="text-black/65">{value}</span>
+    </div>
+  );
+}
+
 function ProductAnalysisCard({
   analysis,
+  imageType,
+  platform,
+  selectedRatio,
+  quantity,
+  model,
   isGenerating,
   onReAnalyze,
   onConfirmGenerate,
 }: {
   analysis: ProductAnalysis;
+  imageType: string;
+  platform: string;
+  selectedRatio: string;
+  quantity: string;
+  model: string;
   isGenerating: boolean;
   onReAnalyze: () => void;
   onConfirmGenerate: () => void;
 }) {
+  const imageTypeLabel = imageType === "main" ? "主图" : "详情图";
+  const planTypeTag = imageType === "main" ? "主图" : "详情图";
+  const forbiddenText =
+    analysis.forbiddenScenes?.trim() ||
+    "避免复制参考图背景，避免凭空添加不可见部件，避免虚构客观参数。";
+
   return (
     <div>
-      <p className="text-sm text-black/35">Oviraq AI · 产品分析</p>
-      <h2 className="mt-2 text-3xl font-semibold">AI 产品分析结果</h2>
+      <p className="text-sm text-black/35">Oviraq AI · 商业摄影导演</p>
+      <h2 className="mt-2 text-3xl font-semibold">AI 商业摄影导演方案</h2>
+      <p className="mt-3 max-w-2xl leading-7 text-black/50">
+        系统已根据商品信息、目标平台和生成类型，生成本次图组规划。请确认后生成图片。
+      </p>
+      <p className="mt-1 text-xs text-black/35">基于当前商品信息与上传图，生成初步商业视觉规划。</p>
 
-      <div className="mt-8 rounded-[28px] border border-black/10 bg-[#fafafa] p-6">
-        <div className="space-y-3 text-sm leading-7 text-black/70">
-          <p>
-            <span className="font-medium text-black">识别类目：</span>
-            {analysis.categoryLabel}
-          </p>
-          <p>
-            <span className="font-medium text-black">产品形态：</span>
-            {analysis.productForm}
-          </p>
-          <p>
-            <span className="font-medium text-black">风格方向：</span>
-            {analysis.styleDirection}
-          </p>
-          <p>
-            <span className="font-medium text-black">结构提示：</span>
-            {analysis.structureHints}
-          </p>
-          <p>
-            <span className="font-medium text-black">推荐场景：</span>
-            {analysis.sceneDirection}
-          </p>
-          <p>
-            <span className="font-medium text-black">禁止场景：</span>
-            {analysis.forbiddenScenes}
-          </p>
-          <p>
-            <span className="font-medium text-black">事实参数规则：</span>
-            {analysis.factSafetyNote}
-          </p>
-        </div>
+      <div className="mt-8 space-y-4">
+        <DirectorSectionCard title="商品识别">
+          <div className="space-y-2">
+            <DirectorInfoRow label="识别类目" value={analysis.categoryLabel} />
+            <DirectorInfoRow label="产品形态" value={analysis.productForm} />
+            <DirectorInfoRow label="风格 DNA" value={analysis.styleDirection} />
+          </div>
+        </DirectorSectionCard>
 
-        <div className="mt-8 border-t border-black/8 pt-6">
-          <h3 className="text-lg font-semibold">图组规划</h3>
-          <div className="mt-4 space-y-4">
-            {analysis.planItems.map((item, index) => (
-              <div key={`${item.title}-${index}`} className="rounded-[18px] border border-black/8 bg-white p-4">
-                <p className="text-sm font-semibold">
-                  #{String(index + 1).padStart(2, "0")} {item.title}
-                </p>
-                <p className="mt-2 text-sm leading-6 text-black/55">{item.description}</p>
+        <DirectorSectionCard title="场景导演">
+          <div className="space-y-4">
+            <div>
+              <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-black/40">推荐场景</p>
+              <p className="text-sm leading-7 text-black/65">{analysis.sceneDirection}</p>
+            </div>
+            <div className="rounded-[14px] border border-black/8 bg-white p-4">
+              <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-black/40">禁止场景</p>
+              <p className="text-sm leading-7 text-black/65">{forbiddenText}</p>
+            </div>
+          </div>
+        </DirectorSectionCard>
+
+        <DirectorSectionCard title="结构与事实安全">
+          <div className="space-y-4">
+            <DirectorInfoRow label="结构提示" value={analysis.structureHints} />
+            <div className="rounded-[14px] border border-black/8 bg-white p-4">
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <p className="text-xs font-medium uppercase tracking-wide text-black/40">事实参数规则</p>
+                <span className="rounded-full border border-black/10 bg-[#f4f4f5] px-2.5 py-0.5 text-[10px] font-medium text-black/55">
+                  防止 AI 编造参数
+                </span>
               </div>
+              <p className="text-sm leading-7 text-black/65">{analysis.factSafetyNote}</p>
+            </div>
+          </div>
+        </DirectorSectionCard>
+
+        <DirectorSectionCard title="图组规划">
+          <p className="mb-4 text-xs text-black/40">
+            共 {analysis.planItems.length} 条 · {imageTypeLabel}模式
+          </p>
+          <div className="space-y-3">
+            {analysis.planItems.map((item, index) => (
+              <div
+                key={`${item.title}-${index}`}
+                className="rounded-[18px] border border-black/8 bg-white p-4 transition hover:border-black/15"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <p className="text-base font-semibold text-black">
+                    #{String(index + 1).padStart(2, "0")} {item.title}
+                  </p>
+                  <span className="shrink-0 rounded-full border border-black/10 bg-[#f4f4f5] px-2.5 py-0.5 text-[10px] font-medium text-black/55">
+                    {planTypeTag}
+                  </span>
+                </div>
+                <p className="mt-2 text-sm leading-6 text-black/50">{item.description}</p>
+              </div>
+            ))}
+          </div>
+        </DirectorSectionCard>
+
+        <div className="rounded-[22px] border border-black/8 bg-[#f7f7f8] p-5">
+          <h3 className="text-sm font-semibold text-black">生成前确认</h3>
+          <p className="mt-2 text-sm leading-7 text-black/55">
+            请确认商品类目、产品形态、推荐场景和图组规划是否符合预期。确认后系统将按当前方案生成图片。
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {[
+              `生成类型 ${imageTypeLabel}`,
+              `平台 ${platform}`,
+              `比例 ${selectedRatio}`,
+              `数量 ${quantity}`,
+              `模型 ${model}`,
+            ].map((item) => (
+              <span
+                key={item}
+                className="rounded-full border border-black/8 bg-white px-3 py-1.5 text-xs text-black/65"
+              >
+                {item}
+              </span>
             ))}
           </div>
         </div>
 
-        <div className="mt-8 flex gap-3">
+        <div className="flex flex-col gap-3 sm:flex-row">
           <button
             type="button"
             onClick={onReAnalyze}
             disabled={isGenerating}
-            className="h-12 flex-1 rounded-full border border-black/10 text-sm font-medium transition hover:bg-white disabled:opacity-40"
+            className="h-12 flex-1 rounded-full border border-black/15 bg-white text-sm font-medium text-black transition hover:bg-[#fafafa] disabled:opacity-40"
           >
             重新分析
           </button>
