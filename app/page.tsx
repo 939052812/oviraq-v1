@@ -39,7 +39,12 @@ const ratioOptions = [
   "21:9 超宽屏",
 ];
 const qualityOptions = ["标准", "高清", "超清"];
-const quantityOptions = ["1 张", "2 张", "3 张", "4 张", "5 张", "6 张", "7 张", "8 张", "9 张", "10 张", "11 张", "12 张"];
+const API_BASE = "http://45.32.250.250:3001";
+
+function getQuantityOptions(imageType: string): string[] {
+  const max = imageType === "detail" ? 15 : 6;
+  return Array.from({ length: max }, (_, index) => `${index + 1} 张`);
+}
 
 function parseAspectRatio(ratioLabel: string): string {
   const match = ratioLabel.match(/^[\d:]+/);
@@ -60,11 +65,62 @@ function mapQuality(value: string): string {
   return "standard";
 }
 
-function parseCount(quantityLabel: string): number {
+function parseCount(quantityLabel: string, imageType = "main"): number {
   const match = quantityLabel.match(/\d+/);
   const count = match ? Number.parseInt(match[0], 10) : 1;
-  return Math.min(12, Math.max(1, count));
+  const max = imageType === "detail" ? 15 : 6;
+  return Math.min(max, Math.max(1, count));
 }
+
+function toText(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value.trim();
+  if (Array.isArray(value)) return value.map(toText).filter(Boolean).join("、");
+  if (typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).map(toText).filter(Boolean).join("、");
+  }
+  return String(value).trim();
+}
+
+function toList(value: unknown): string[] {
+  if (value === null || value === undefined) return [];
+  if (Array.isArray(value)) return value.map(toText).filter(Boolean);
+  const text = toText(value);
+  return text ? [text] : [];
+}
+
+type AnalysisImagePlanItem = {
+  role?: unknown;
+  goal?: unknown;
+  mustKeep?: unknown;
+  mustAvoid?: unknown;
+};
+
+type ProductAnalysis = {
+  version?: unknown;
+  source?: unknown;
+  category?: unknown;
+  productForm?: unknown;
+  styleDNA?: unknown;
+  visibleStructure?: unknown;
+  visibleMaterials?: unknown;
+  visibleText?: unknown;
+  recommendedScenes?: unknown;
+  forbiddenScenes?: unknown;
+  objectiveFacts?: unknown;
+  factSafetyNote?: unknown;
+  imagePlan?: unknown;
+  request?: unknown;
+  confidence?: unknown;
+};
+
+type AnalysisMeta = {
+  analyzerVersion?: string;
+  mode?: string;
+  fileCount?: number;
+  model?: string;
+  note?: string;
+};
 
 function normalizeSelectOptions(options: string[] | SelectOption[]): SelectOption[] {
   return options.map((option) =>
@@ -127,7 +183,7 @@ function extractImageUrls(data: {
 }
 
 export default function Home() {
-  const [stage, setStage] = useState<"idle" | "analyzing" | "schemes" | "generating" | "results">("idle");
+  const [stage, setStage] = useState<"idle" | "analyzing" | "analysis" | "generating" | "results">("idle");
   const [preview, setPreview] = useState<number | null>(null);
   const [analyzingStep, setAnalyzingStep] = useState(0);
   const [imageType, setImageType] = useState("main");
@@ -142,7 +198,41 @@ export default function Home() {
   const [generatedImages, setGeneratedImages] = useState<string[]>([]);
   const [productImages, setProductImages] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
+  const [productAnalysis, setProductAnalysis] = useState<ProductAnalysis | null>(null);
+  const [analysisMeta, setAnalysisMeta] = useState<AnalysisMeta | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const quantityOptions = getQuantityOptions(imageType);
+  const productImagesKey = productImages
+    .map((file) => `${file.name}-${file.size}-${file.lastModified}`)
+    .join("|");
+
+  function clearAnalysisState() {
+    setProductAnalysis(null);
+    setAnalysisMeta(null);
+    setAnalysisError(null);
+  }
+
+  useEffect(() => {
+    clearAnalysisState();
+    if (stage === "analysis") {
+      setStage("idle");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    productImagesKey,
+    imageType,
+    platform,
+    productInfo,
+    language,
+    model,
+    selectedRatio,
+    quality,
+    quantity,
+  ]);
 
   useEffect(() => {
     const urls = productImages.map((file) => URL.createObjectURL(file));
@@ -175,16 +265,86 @@ export default function Home() {
     setProductImages((prev) => prev.filter((_, i) => i !== index));
   }
 
-  async function analyze() {
+  function buildAnalyzeFormData() {
+    const aspectRatio = parseAspectRatio(selectedRatio);
+    const imageCount = parseCount(quantity, imageType);
+    const formData = new FormData();
+
+    productImages.forEach((file) => {
+      formData.append("images", file);
+    });
+    formData.append("image", productImages[0]);
+    formData.append("productInfo", productInfo);
+    formData.append("imageType", imageType);
+    formData.append("platform", platform);
+    formData.append("targetLanguage", language);
+    formData.append("aspectRatio", aspectRatio);
+    formData.append("imageCount", String(imageCount));
+
+    return formData;
+  }
+
+  async function handleAnalyzeProduct() {
     if (productImages.length === 0) {
       alert("请至少上传 1 张商品图");
       return;
     }
 
+    setIsAnalyzing(true);
     setAnalyzingStep(1);
+    setAnalysisError(null);
     setStage("analyzing");
 
-    const count = parseCount(quantity);
+    try {
+      const res = await fetch(`${API_BASE}/analyze-product`, {
+        method: "POST",
+        body: buildAnalyzeFormData(),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data.success || !data.analysis) {
+        const message =
+          typeof data.error === "string"
+            ? data.error
+            : typeof data.message === "string"
+              ? data.message
+              : "产品分析失败，请稍后重试";
+        setAnalysisError(message);
+        setStage("idle");
+        return;
+      }
+
+      setProductAnalysis(data.analysis);
+      setAnalysisMeta(data.meta ?? null);
+      if (data.aiError) {
+        setAnalysisError(String(data.aiError));
+      }
+      setStage("analysis");
+    } catch (error) {
+      console.error(error);
+      setAnalysisError("产品分析请求失败，请检查网络后重试");
+      setStage("idle");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  }
+
+  async function generateImages() {
+    if (productImages.length === 0) {
+      alert("请至少上传 1 张商品图");
+      return;
+    }
+
+    if (!productAnalysis) {
+      alert("请先完成产品分析");
+      return;
+    }
+
+    setIsGenerating(true);
+    setStage("generating");
+
+    const count = parseCount(quantity, imageType);
     const aspectRatio = parseAspectRatio(selectedRatio);
     const qualityValue = mapQuality(quality);
 
@@ -202,6 +362,11 @@ export default function Home() {
     formData.append("aspectRatio", aspectRatio);
     formData.append("quality", qualityValue);
     formData.append("count", String(count));
+    formData.append("analysisPlanJson", JSON.stringify(productAnalysis));
+    formData.append("analysisMetaJson", JSON.stringify(analysisMeta ?? {}));
+    formData.append("analysisCategory", toText(productAnalysis.category));
+    formData.append("analysisProductForm", toText(productAnalysis.productForm));
+    formData.append("analysisFactSafetyNote", toText(productAnalysis.factSafetyNote));
 
     console.log("[Oviraq Frontend Submit]");
     console.log("imageType:", imageType);
@@ -213,7 +378,7 @@ export default function Home() {
     console.log("count:", count);
 
     try {
-      const res = await fetch("http://45.32.250.250:3001/auto-generate-product", {
+      const res = await fetch(`${API_BASE}/auto-generate-product`, {
         method: "POST",
         body: formData,
       });
@@ -227,14 +392,32 @@ export default function Home() {
       } else {
         console.error(data.error ?? data);
         alert(typeof data.error === "string" ? data.error : "生成失败");
-        setStage("idle");
+        setStage("analysis");
       }
     } catch (error) {
       console.error(error);
       alert("请求失败，请稍后重试");
-      setStage("idle");
+      setStage("analysis");
+    } finally {
+      setIsGenerating(false);
     }
   }
+
+  function handlePrimaryAction() {
+    if (productAnalysis) {
+      void generateImages();
+      return;
+    }
+    void handleAnalyzeProduct();
+  }
+
+  const primaryButtonLabel = isGenerating
+    ? "正在生成..."
+    : isAnalyzing
+      ? "正在分析..."
+      : productAnalysis
+        ? "确认生成图片"
+        : "分析产品";
 
   useEffect(() => {
     if (stage !== "analyzing") return;
@@ -337,13 +520,25 @@ export default function Home() {
 
           <div className="mb-4 grid grid-cols-2 rounded-full bg-[#f1f1f2] p-0.5">
             <button
-              onClick={() => setImageType("main")}
+              onClick={() => {
+                setImageType("main");
+                setQuantity((current) => {
+                  const count = parseCount(current, "main");
+                  return `${Math.min(count, 6)} 张`;
+                });
+              }}
               className={`rounded-full py-2 text-sm ${imageType === "main" ? "bg-black font-medium text-white" : "text-black/55"}`}
             >
               主图
             </button>
             <button
-              onClick={() => setImageType("detail")}
+              onClick={() => {
+                setImageType("detail");
+                setQuantity((current) => {
+                  const count = parseCount(current, "detail");
+                  return `${Math.min(count, 15)} 张`;
+                });
+              }}
               className={`rounded-full py-2 text-sm ${imageType === "detail" ? "bg-black font-medium text-white" : "text-black/55"}`}
             >
               详情图
@@ -423,18 +618,27 @@ export default function Home() {
           </div>
 
           <button
-            onClick={analyze}
-            disabled={stage === "analyzing"}
+            onClick={handlePrimaryAction}
+            disabled={isAnalyzing || isGenerating}
             className="mt-5 h-12 w-full rounded-full bg-black text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:bg-black/40 disabled:hover:opacity-100"
           >
-            {stage === "analyzing" ? "生成中..." : "分析产品"}
+            {primaryButtonLabel}
           </button>
         </aside>
 
         <section className="min-w-0 flex-1 overflow-y-auto rounded-[30px] bg-white p-8 shadow-sm">
-          {stage === "idle" && <EmptyState imageType={imageType} />}
+          {stage === "idle" && !analysisError && <EmptyState imageType={imageType} />}
+          {stage === "idle" && analysisError && (
+            <AnalysisError message={analysisError} onRetry={() => void handleAnalyzeProduct()} />
+          )}
           {stage === "analyzing" && <Analyzing step={analyzingStep} />}
-          {stage === "schemes" && <Schemes onGenerate={() => setStage("generating")} />}
+          {stage === "analysis" && productAnalysis && (
+            <AnalysisPreview
+              analysis={productAnalysis}
+              meta={analysisMeta}
+              warning={analysisError}
+            />
+          )}
           {stage === "generating" && <Generating />}
           {stage === "results" && (
             <Results
@@ -442,7 +646,7 @@ export default function Home() {
               generatedImages={generatedImages}
               modelName={MODEL_LABEL}
               aspectRatio={parseAspectRatio(selectedRatio)}
-              onBack={() => setStage("idle")}
+              onBack={() => setStage(productAnalysis ? "analysis" : "idle")}
               onPreview={setPreview}
             />
           )}
@@ -565,8 +769,194 @@ function EmptyState({ imageType }: { imageType: string }) {
         <h2 className="text-3xl font-semibold">
           {imageType === "main" ? "AI 商业视觉生成" : "AI 商品详情图生成"}
         </h2>
-        <p className="mt-4 leading-8 text-black/45">上传商品图并填写需求后<br />AI 将自动生成商业摄影方案与视觉内容</p>
+        <p className="mt-4 leading-8 text-black/45">
+          上传商品图并填写需求后
+          <br />
+          点击「分析产品」查看 AI 分析结果，再确认生成图片
+        </p>
       </div>
+    </div>
+  );
+}
+
+function AnalysisError({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="mx-auto flex h-full max-w-2xl flex-col items-center justify-center text-center">
+      <div className="w-full rounded-[24px] border border-black/10 bg-white p-8">
+        <h2 className="text-2xl font-semibold">产品分析未完成</h2>
+        <p className="mt-4 text-sm leading-7 text-black/55">{message}</p>
+        <button
+          type="button"
+          onClick={onRetry}
+          className="mt-6 h-11 rounded-full bg-black px-6 text-sm font-medium text-white"
+        >
+          重新分析
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AnalysisField({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-[20px] border border-black/8 bg-white p-4">
+      <h3 className="text-xs font-medium text-black/45">{label}</h3>
+      <div className="mt-2 text-sm leading-6 text-black/80">{children}</div>
+    </div>
+  );
+}
+
+function AnalysisPreview({
+  analysis,
+  meta,
+  warning,
+}: {
+  analysis: ProductAnalysis;
+  meta: AnalysisMeta | null;
+  warning?: string | null;
+}) {
+  const styleDNAList = toList(analysis.styleDNA);
+  const visibleStructureList = toList(analysis.visibleStructure);
+  const visibleMaterialsList = toList(analysis.visibleMaterials);
+  const visibleTextList = toList(analysis.visibleText);
+  const recommendedScenesList = toList(analysis.recommendedScenes);
+  const forbiddenScenesList = toList(analysis.forbiddenScenes);
+  const imagePlanList = Array.isArray(analysis.imagePlan)
+    ? (analysis.imagePlan as AnalysisImagePlanItem[])
+    : [];
+  const factSafetyNote = toText(analysis.factSafetyNote);
+
+  return (
+    <div className="mx-auto max-w-4xl">
+      <div className="mb-6">
+        <p className="text-sm text-black/35">Oviraq AI · 产品分析</p>
+        <h2 className="mt-2 text-3xl font-semibold">AI 产品分析结果</h2>
+        <p className="mt-3 text-black/45">请确认分析结果后，点击左侧「确认生成图片」继续出图</p>
+        {meta && (
+          <div className="mt-4 flex flex-wrap gap-2">
+            {meta.analyzerVersion && (
+              <span className="rounded-full bg-[#f4f4f5] px-3 py-1.5 text-xs text-black/70">
+                分析版本 {meta.analyzerVersion}
+              </span>
+            )}
+            {meta.mode && (
+              <span className="rounded-full bg-[#f4f4f5] px-3 py-1.5 text-xs text-black/70">
+                模式 {meta.mode}
+              </span>
+            )}
+            {typeof meta.fileCount === "number" && (
+              <span className="rounded-full bg-[#f4f4f5] px-3 py-1.5 text-xs text-black/70">
+                参考图 {meta.fileCount} 张
+              </span>
+            )}
+          </div>
+        )}
+        {warning && (
+          <div className="mt-4 rounded-[16px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            {warning}
+          </div>
+        )}
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <AnalysisField label="识别类目">{toText(analysis.category) || "—"}</AnalysisField>
+        <AnalysisField label="产品形态">{toText(analysis.productForm) || "—"}</AnalysisField>
+        <AnalysisField label="风格方向">
+          {styleDNAList.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {styleDNAList.map((tag) => (
+                <span key={tag} className="rounded-full border border-black/10 px-2.5 py-1 text-xs text-black/70">
+                  {tag}
+                </span>
+              ))}
+            </div>
+          ) : (
+            "—"
+          )}
+        </AnalysisField>
+        <AnalysisField label="可见文字">
+          {visibleTextList.length > 0 ? (
+            <ul className="space-y-1">
+              {visibleTextList.map((text) => (
+                <li key={text}>{text}</li>
+              ))}
+            </ul>
+          ) : (
+            "未识别到清晰可读文字"
+          )}
+        </AnalysisField>
+        <AnalysisField label="可见结构">
+          {visibleStructureList.length > 0 ? visibleStructureList.join("、") : "—"}
+        </AnalysisField>
+        <AnalysisField label="可见材质">
+          {visibleMaterialsList.length > 0 ? visibleMaterialsList.join("、") : "—"}
+        </AnalysisField>
+        <AnalysisField label="推荐场景">
+          {recommendedScenesList.length > 0 ? recommendedScenesList.join("、") : "—"}
+        </AnalysisField>
+        <AnalysisField label="禁止场景">
+          {forbiddenScenesList.length > 0 ? forbiddenScenesList.join("、") : "—"}
+        </AnalysisField>
+      </div>
+
+      {factSafetyNote && (
+        <div className="mt-4 rounded-[20px] border border-black/8 bg-[#fafafa] p-4">
+          <h3 className="text-xs font-medium text-black/45">事实参数规则</h3>
+          <p className="mt-2 text-sm leading-6 text-black/75">{factSafetyNote}</p>
+        </div>
+      )}
+
+      {imagePlanList.length > 0 && (
+        <div className="mt-6">
+          <h3 className="mb-3 text-sm font-semibold">图组规划</h3>
+          <div className="grid gap-4">
+            {imagePlanList.map((item, index) => {
+              const role = toText(item.role);
+              const goal = toText(item.goal);
+              const mustKeep = toText(item.mustKeep);
+              const mustAvoid = toText(item.mustAvoid);
+
+              return (
+                <div
+                  key={`${role || "plan"}-${index}`}
+                  className="rounded-[20px] border border-black/8 bg-white p-4"
+                >
+                  <div className="mb-3 flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-semibold">#{String(index + 1).padStart(2, "0")}</span>
+                    {role && (
+                      <span className="rounded-full bg-black px-2.5 py-1 text-[11px] text-white">{role}</span>
+                    )}
+                  </div>
+                  {goal && (
+                    <p className="text-sm leading-6 text-black/75">
+                      <span className="text-black/45">目标：</span>
+                      {goal}
+                    </p>
+                  )}
+                  {mustKeep && (
+                    <p className="mt-2 text-sm leading-6 text-black/75">
+                      <span className="text-black/45">必须保留：</span>
+                      {mustKeep}
+                    </p>
+                  )}
+                  {mustAvoid && (
+                    <p className="mt-2 text-sm leading-6 text-black/75">
+                      <span className="text-black/45">必须避免：</span>
+                      {mustAvoid}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
