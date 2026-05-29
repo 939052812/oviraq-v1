@@ -914,27 +914,14 @@ export default function Home() {
       return;
     }
     if (!analysisPreview) {
-      alert("请先点击「分析产品」，确认导演方案后再生成图片");
       return;
     }
 
     setStage("generating");
 
-    const analysisCategory = analysisPreview.categoryLabel ?? "";
-    const analysisProductForm = analysisPreview.productForm ?? "";
-    const analysisStyleDirection = analysisPreview.styleDirection ?? "";
-    const analysisStructureHints = analysisPreview.structureHints ?? "";
-    const analysisSceneDirection = analysisPreview.sceneDirection ?? "";
-    const analysisForbiddenScenes = analysisPreview.forbiddenScenes ?? "";
-    const analysisFactSafetyNote = analysisPreview.factSafetyNote ?? "";
-    const analysisPlanJson = JSON.stringify(analysisPreview.planItems ?? []);
-
-    console.log("analysis payload", {
-      analysisCategory,
-      analysisProductForm,
-      analysisStyleDirection,
-      analysisPlanJson,
-    });
+    const count = parseCount(quantity);
+    const aspectRatio = parseAspectRatio(selectedRatio);
+    const qualityValue = mapQuality(quality);
 
     const formData = new FormData();
     productImages.forEach((file) => {
@@ -945,15 +932,20 @@ export default function Home() {
     formData.append("platform", platform);
     formData.append("productInfo", productInfo);
     formData.append("targetLanguage", language);
-    formData.append("count", quantity);
-    formData.append("analysisCategory", analysisCategory);
-    formData.append("analysisProductForm", analysisProductForm);
-    formData.append("analysisStyleDirection", analysisStyleDirection);
-    formData.append("analysisStructureHints", analysisStructureHints);
-    formData.append("analysisSceneDirection", analysisSceneDirection);
-    formData.append("analysisForbiddenScenes", analysisForbiddenScenes);
-    formData.append("analysisFactSafetyNote", analysisFactSafetyNote);
-    formData.append("analysisPlanJson", analysisPlanJson);
+    formData.append("provider", IMAGE_PROVIDER);
+    formData.append("model", IMAGE_MODEL);
+    formData.append("aspectRatio", aspectRatio);
+    formData.append("quality", qualityValue);
+    formData.append("count", String(count));
+
+    console.log("[Oviraq Frontend Submit]");
+    console.log("imageType:", imageType);
+    console.log("platform:", platform);
+    console.log("targetLanguage:", language);
+    console.log("model:", IMAGE_MODEL);
+    console.log("aspectRatio:", aspectRatio);
+    console.log("quality:", qualityValue);
+    console.log("count:", count);
 
     try {
       const res = await fetch("http://45.32.250.250:3001/auto-generate-product", {
@@ -1350,9 +1342,6 @@ function ProductAnalysisCard({
           <h3 className="text-sm font-semibold text-black">生成前确认</h3>
           <p className="mt-2 text-sm leading-7 text-black/55">
             请确认商品类目、产品形态、推荐场景和图组规划是否符合预期。确认后系统将按当前方案生成图片。
-          </p>
-          <p className="mt-2 text-xs leading-6 text-black/40">
-            当前导演方案将随生成请求一起提交，用于后续生成更符合类目、产品形态、场景和图组规划的图片。
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
             {[
