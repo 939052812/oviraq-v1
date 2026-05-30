@@ -77,7 +77,33 @@ function toText(value: unknown): string {
   if (typeof value === "string") return value.trim();
   if (Array.isArray(value)) return value.map(toText).filter(Boolean).join("、");
   if (typeof value === "object") {
-    return Object.values(value as Record<string, unknown>).map(toText).filter(Boolean).join("、");
+    const obj = value as Record<string, unknown>;
+    const preferredKeys = [
+      "label",
+      "name",
+      "title",
+      "roleLabel",
+      "roleName",
+      "role",
+      "goal",
+      "sceneDescription",
+      "sceneType",
+      "sceneIntent",
+    ];
+    for (const key of preferredKeys) {
+      if (key in obj) {
+        const text = toText(obj[key]);
+        if (text) return text;
+      }
+    }
+    const joined = Object.values(obj).map(toText).filter(Boolean).join("、");
+    if (joined) return joined;
+    try {
+      const json = JSON.stringify(obj);
+      return json.length > 120 ? `${json.slice(0, 117)}...` : json;
+    } catch {
+      return "";
+    }
   }
   return String(value).trim();
 }
@@ -88,6 +114,38 @@ function toList(value: unknown): string[] {
   const text = toText(value);
   return text ? [text] : [];
 }
+
+function visibleTextToList(value: unknown): string[] {
+  return toList(value);
+}
+
+function pickSection(plan: unknown, key: string): Record<string, unknown> {
+  if (!plan || typeof plan !== "object" || Array.isArray(plan)) return {};
+  const section = (plan as Record<string, unknown>)[key];
+  if (!section || typeof section !== "object" || Array.isArray(section)) return {};
+  return section as Record<string, unknown>;
+}
+
+function pickNestedSection(plan: unknown, ...keys: string[]): Record<string, unknown> {
+  let current: unknown = plan;
+  for (const key of keys) {
+    current = pickSection(current, key);
+  }
+  return (current ?? {}) as Record<string, unknown>;
+}
+
+function formatObjectStates(value: unknown): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return toText(value);
+  return Object.entries(value as Record<string, unknown>)
+    .map(([key, item]) => {
+      const text = toText(item);
+      return text ? `${key}: ${text}` : "";
+    })
+    .filter(Boolean)
+    .join("；");
+}
+
+type DirectorPlan = Record<string, unknown>;
 
 type AnalysisImagePlanItem = {
   role?: unknown;
@@ -120,6 +178,9 @@ type AnalysisMeta = {
   fileCount?: number;
   model?: string;
   note?: string;
+  directorVersion?: string;
+  directorSchema?: string;
+  legacyCompatible?: boolean;
 };
 
 function normalizeSelectOptions(options: string[] | SelectOption[]): SelectOption[] {
@@ -151,6 +212,116 @@ type ImageUsagePlanItem = {
   usage: string;
   description: string;
 };
+
+function getFallbackUsageLabel(index: number): string {
+  if (index === 0) return "主图";
+  if (index === 1) return "场景图";
+  if (index === 2) return "细节图";
+  return "图片";
+}
+
+function extractDirectorPlanFromUnknown(source: unknown): DirectorPlan | null {
+  if (!source || typeof source !== "object") return null;
+  const obj = source as Record<string, unknown>;
+
+  if (Array.isArray(obj.imagePlan) || obj.productIdentity || obj.styleDirection) {
+    return obj as DirectorPlan;
+  }
+
+  const nestedKeys = ["directorPlan", "analysisPlan", "ProductAnalysisPlan"];
+  for (const key of nestedKeys) {
+    const nested = obj[key];
+    if (!nested || typeof nested !== "object" || Array.isArray(nested)) continue;
+
+    const nestedObj = nested as Record<string, unknown>;
+    if (Array.isArray(nestedObj.imagePlan) || nestedObj.productIdentity || nestedObj.styleDirection) {
+      return nestedObj as DirectorPlan;
+    }
+
+    const deeper = nestedObj.directorPlan;
+    if (deeper && typeof deeper === "object" && !Array.isArray(deeper)) {
+      return deeper as DirectorPlan;
+    }
+  }
+
+  return null;
+}
+
+function resolveActiveDirectorPlan(
+  directorPlan: DirectorPlan | null,
+  productAnalysis: ProductAnalysis | null
+): DirectorPlan | null {
+  return (
+    extractDirectorPlanFromUnknown(directorPlan) ||
+    extractDirectorPlanFromUnknown(productAnalysis) ||
+    null
+  );
+}
+
+function pickImagePlanItem(plan: DirectorPlan | null, index: number): Record<string, unknown> | null {
+  if (!plan) return null;
+  const imagePlan = plan.imagePlan;
+  if (!Array.isArray(imagePlan)) return null;
+  const item = imagePlan[index];
+  if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+  return item as Record<string, unknown>;
+}
+
+type ResultCardDisplay = {
+  indexLabel: string;
+  title: string;
+  badge: string;
+  description: string;
+};
+
+function getResultCardDisplay(
+  index: number,
+  activeDirectorPlan: DirectorPlan | null
+): ResultCardDisplay {
+  const indexLabel = `#${String(index + 1).padStart(2, "0")}`;
+  const fallbackUsage = getFallbackUsageLabel(index);
+  const fallbackPlan = getImageUsagePlan(index + 1)[index];
+
+  const imagePlanItem = pickImagePlanItem(activeDirectorPlan, index);
+  if (!imagePlanItem) {
+    return {
+      indexLabel,
+      title: fallbackPlan?.usage || fallbackUsage,
+      badge: fallbackPlan?.usage || fallbackUsage,
+      description: fallbackPlan?.description || IMAGE_USAGE_DESCRIPTIONS[fallbackUsage] || "",
+    };
+  }
+
+  const title =
+    toText(imagePlanItem.roleLabel) ||
+    toText(imagePlanItem.title) ||
+    toText(imagePlanItem.roleName) ||
+    toText(imagePlanItem.role) ||
+    fallbackPlan?.usage ||
+    fallbackUsage;
+
+  const roleText = toText(imagePlanItem.role);
+  const roleLabelText = toText(imagePlanItem.roleLabel);
+  const badge = roleText || (roleLabelText !== title ? roleLabelText : "") || title;
+
+  const productFocus = pickSection(imagePlanItem, "productFocus");
+  const description =
+    toText(imagePlanItem.goal) ||
+    toText(imagePlanItem.sceneIntent) ||
+    toText(productFocus) ||
+    toList(productFocus.focusPoints).join("、") ||
+    toText(imagePlanItem.focusPoints) ||
+    fallbackPlan?.description ||
+    IMAGE_USAGE_DESCRIPTIONS[fallbackUsage] ||
+    "";
+
+  return {
+    indexLabel,
+    title,
+    badge,
+    description,
+  };
+}
 
 function getImageUsagePlan(total: number): ImageUsagePlanItem[] {
   const count = Math.max(1, Math.min(total, 12));
@@ -199,6 +370,7 @@ export default function Home() {
   const [productImages, setProductImages] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
   const [productAnalysis, setProductAnalysis] = useState<ProductAnalysis | null>(null);
+  const [directorPlan, setDirectorPlan] = useState<DirectorPlan | null>(null);
   const [analysisMeta, setAnalysisMeta] = useState<AnalysisMeta | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -212,6 +384,7 @@ export default function Home() {
 
   function clearAnalysisState() {
     setProductAnalysis(null);
+    setDirectorPlan(null);
     setAnalysisMeta(null);
     setAnalysisError(null);
   }
@@ -302,8 +475,10 @@ export default function Home() {
       });
 
       const data = await res.json();
+      const legacyAnalysis = data.analysis || data.legacyAnalysis || null;
+      const nextDirectorPlan = data.directorPlan || data.analysisPlan || null;
 
-      if (!res.ok || !data.success || !data.analysis) {
+      if (!res.ok || !data.success || !legacyAnalysis) {
         const message =
           typeof data.error === "string"
             ? data.error
@@ -315,7 +490,8 @@ export default function Home() {
         return;
       }
 
-      setProductAnalysis(data.analysis);
+      setProductAnalysis(legacyAnalysis);
+      setDirectorPlan(nextDirectorPlan);
       setAnalysisMeta(data.meta ?? null);
       if (data.aiError) {
         setAnalysisError(String(data.aiError));
@@ -336,7 +512,7 @@ export default function Home() {
       return;
     }
 
-    if (!productAnalysis) {
+    if (!productAnalysis && !directorPlan) {
       alert("请先完成产品分析");
       return;
     }
@@ -347,6 +523,10 @@ export default function Home() {
     const count = parseCount(quantity, imageType);
     const aspectRatio = parseAspectRatio(selectedRatio);
     const qualityValue = mapQuality(quality);
+    const confirmedAnalysisPlan = directorPlan || productAnalysis;
+    const confirmedIdentity = pickSection(confirmedAnalysisPlan, "productIdentity");
+    const confirmedFactSafety = pickSection(confirmedAnalysisPlan, "factSafety");
+    const legacyAnalysis = productAnalysis as ProductAnalysis | null;
 
     const formData = new FormData();
     productImages.forEach((file) => {
@@ -362,11 +542,20 @@ export default function Home() {
     formData.append("aspectRatio", aspectRatio);
     formData.append("quality", qualityValue);
     formData.append("count", String(count));
-    formData.append("analysisPlanJson", JSON.stringify(productAnalysis));
-    formData.append("analysisMetaJson", JSON.stringify(analysisMeta ?? {}));
-    formData.append("analysisCategory", toText(productAnalysis.category));
-    formData.append("analysisProductForm", toText(productAnalysis.productForm));
-    formData.append("analysisFactSafetyNote", toText(productAnalysis.factSafetyNote));
+    formData.append("analysisPlanJson", JSON.stringify(confirmedAnalysisPlan || {}));
+    formData.append("analysisMetaJson", JSON.stringify(analysisMeta || {}));
+    formData.append(
+      "analysisCategory",
+      toText(confirmedIdentity.category) || toText(legacyAnalysis?.category) || ""
+    );
+    formData.append(
+      "analysisProductForm",
+      toText(confirmedIdentity.productForm) || toText(legacyAnalysis?.productForm) || ""
+    );
+    formData.append(
+      "analysisFactSafetyNote",
+      toText(confirmedFactSafety.factSafetyNote) || toText(legacyAnalysis?.factSafetyNote) || ""
+    );
 
     console.log("[Oviraq Frontend Submit]");
     console.log("imageType:", imageType);
@@ -404,7 +593,7 @@ export default function Home() {
   }
 
   function handlePrimaryAction() {
-    if (productAnalysis) {
+    if (productAnalysis || directorPlan) {
       void generateImages();
       return;
     }
@@ -415,7 +604,7 @@ export default function Home() {
     ? "正在生成..."
     : isAnalyzing
       ? "正在分析..."
-      : productAnalysis
+      : productAnalysis || directorPlan
         ? "确认生成图片"
         : "分析产品";
 
@@ -632,9 +821,10 @@ export default function Home() {
             <AnalysisError message={analysisError} onRetry={() => void handleAnalyzeProduct()} />
           )}
           {stage === "analyzing" && <Analyzing step={analyzingStep} />}
-          {stage === "analysis" && productAnalysis && (
+          {stage === "analysis" && (productAnalysis || directorPlan) && (
             <AnalysisPreview
               analysis={productAnalysis}
+              directorPlan={directorPlan}
               meta={analysisMeta}
               warning={analysisError}
             />
@@ -646,6 +836,8 @@ export default function Home() {
               generatedImages={generatedImages}
               modelName={MODEL_LABEL}
               aspectRatio={parseAspectRatio(selectedRatio)}
+              directorPlan={directorPlan}
+              productAnalysis={productAnalysis}
               onBack={() => setStage(productAnalysis ? "analysis" : "idle")}
               onPreview={setPreview}
             />
@@ -812,7 +1004,60 @@ function AnalysisField({
   );
 }
 
-function AnalysisPreview({
+function AnalysisSection({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="mt-6">
+      <h3 className="mb-3 text-sm font-semibold">{title}</h3>
+      <div className="grid gap-4 md:grid-cols-2">{children}</div>
+    </div>
+  );
+}
+
+function TagList({ items }: { items: string[] }) {
+  if (items.length === 0) return <>—</>;
+  return (
+    <div className="flex flex-wrap gap-2">
+      {items.map((tag) => (
+        <span key={tag} className="rounded-full border border-black/10 px-2.5 py-1 text-xs text-black/70">
+          {tag}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function AnalysisMetaBadges({ meta }: { meta: AnalysisMeta | null }) {
+  if (!meta) return null;
+
+  const badges = [
+    meta.directorVersion ? `导演版本 ${meta.directorVersion}` : null,
+    meta.directorSchema ? `方案结构 ${meta.directorSchema}` : null,
+    meta.analyzerVersion ? `分析版本 ${meta.analyzerVersion}` : null,
+    meta.mode ? `模式 ${meta.mode}` : null,
+    typeof meta.fileCount === "number" ? `参考图 ${meta.fileCount} 张` : null,
+    meta.legacyCompatible ? "兼容旧版分析" : null,
+  ].filter(Boolean) as string[];
+
+  if (badges.length === 0) return null;
+
+  return (
+    <div className="mt-4 flex flex-wrap gap-2">
+      {badges.map((item) => (
+        <span key={item} className="rounded-full bg-[#f4f4f5] px-3 py-1.5 text-xs text-black/70">
+          {item}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function LegacyAnalysisPreview({
   analysis,
   meta,
   warning,
@@ -824,7 +1069,7 @@ function AnalysisPreview({
   const styleDNAList = toList(analysis.styleDNA);
   const visibleStructureList = toList(analysis.visibleStructure);
   const visibleMaterialsList = toList(analysis.visibleMaterials);
-  const visibleTextList = toList(analysis.visibleText);
+  const visibleTextList = visibleTextToList(analysis.visibleText);
   const recommendedScenesList = toList(analysis.recommendedScenes);
   const forbiddenScenesList = toList(analysis.forbiddenScenes);
   const imagePlanList = Array.isArray(analysis.imagePlan)
@@ -838,25 +1083,7 @@ function AnalysisPreview({
         <p className="text-sm text-black/35">Oviraq AI · 产品分析</p>
         <h2 className="mt-2 text-3xl font-semibold">AI 产品分析结果</h2>
         <p className="mt-3 text-black/45">请确认分析结果后，点击左侧「确认生成图片」继续出图</p>
-        {meta && (
-          <div className="mt-4 flex flex-wrap gap-2">
-            {meta.analyzerVersion && (
-              <span className="rounded-full bg-[#f4f4f5] px-3 py-1.5 text-xs text-black/70">
-                分析版本 {meta.analyzerVersion}
-              </span>
-            )}
-            {meta.mode && (
-              <span className="rounded-full bg-[#f4f4f5] px-3 py-1.5 text-xs text-black/70">
-                模式 {meta.mode}
-              </span>
-            )}
-            {typeof meta.fileCount === "number" && (
-              <span className="rounded-full bg-[#f4f4f5] px-3 py-1.5 text-xs text-black/70">
-                参考图 {meta.fileCount} 张
-              </span>
-            )}
-          </div>
-        )}
+        <AnalysisMetaBadges meta={meta} />
         {warning && (
           <div className="mt-4 rounded-[16px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
             {warning}
@@ -868,17 +1095,7 @@ function AnalysisPreview({
         <AnalysisField label="识别类目">{toText(analysis.category) || "—"}</AnalysisField>
         <AnalysisField label="产品形态">{toText(analysis.productForm) || "—"}</AnalysisField>
         <AnalysisField label="风格方向">
-          {styleDNAList.length > 0 ? (
-            <div className="flex flex-wrap gap-2">
-              {styleDNAList.map((tag) => (
-                <span key={tag} className="rounded-full border border-black/10 px-2.5 py-1 text-xs text-black/70">
-                  {tag}
-                </span>
-              ))}
-            </div>
-          ) : (
-            "—"
-          )}
+          <TagList items={styleDNAList} />
         </AnalysisField>
         <AnalysisField label="可见文字">
           {visibleTextList.length > 0 ? (
@@ -959,6 +1176,219 @@ function AnalysisPreview({
       )}
     </div>
   );
+}
+
+function DirectorImagePlanCard({ item, index }: { item: Record<string, unknown>; index: number }) {
+  const sceneIntent = pickSection(item, "sceneIntent");
+  const composition = pickSection(item, "composition");
+  const productFocus = pickSection(item, "productFocus");
+  const planIndex = toText(item.index) || String(index + 1).padStart(2, "0");
+  const roleLabel = toText(item.roleLabel);
+  const role = toText(item.role);
+  const goal = toText(item.goal);
+  const renderMode = toText(item.renderMode);
+  const layoutType = toText(item.layoutType);
+  const stateControl = formatObjectStates(item.stateControl);
+  const mustKeep = toText(productFocus.mustKeep);
+  const mustAvoid = toText(productFocus.mustAvoid);
+  const focusPoints = toList(productFocus.focusPoints);
+
+  return (
+    <div className="rounded-[20px] border border-black/8 bg-white p-4">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <span className="text-sm font-semibold">#{planIndex.padStart(2, "0")}</span>
+        {roleLabel && (
+          <span className="rounded-full bg-black px-2.5 py-1 text-[11px] text-white">{roleLabel}</span>
+        )}
+        {role && role !== roleLabel && (
+          <span className="rounded-full border border-black/10 px-2.5 py-1 text-[11px] text-black/70">
+            {role}
+          </span>
+        )}
+      </div>
+
+      <div className="space-y-2 text-sm leading-6 text-black/75">
+        {goal && (
+          <p>
+            <span className="text-black/45">目标：</span>
+            {goal}
+          </p>
+        )}
+        {(renderMode || layoutType) && (
+          <p>
+            <span className="text-black/45">渲染 / 布局：</span>
+            {[renderMode, layoutType].filter(Boolean).join(" · ")}
+          </p>
+        )}
+        {(toText(sceneIntent.sceneType) || toText(sceneIntent.sceneDescription)) && (
+          <p>
+            <span className="text-black/45">场景意图：</span>
+            {[toText(sceneIntent.sceneType), toText(sceneIntent.sceneDescription)].filter(Boolean).join(" · ")}
+          </p>
+        )}
+        {(toText(composition.cameraAngle) || toText(composition.framing) || toText(composition.productCoverage)) && (
+          <p>
+            <span className="text-black/45">构图：</span>
+            {[toText(composition.cameraAngle), toText(composition.framing), toText(composition.productCoverage)]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
+        )}
+        {stateControl && (
+          <p>
+            <span className="text-black/45">状态控制：</span>
+            {stateControl}
+          </p>
+        )}
+        {mustKeep && (
+          <p>
+            <span className="text-black/45">必须保留：</span>
+            {mustKeep}
+          </p>
+        )}
+        {mustAvoid && (
+          <p>
+            <span className="text-black/45">必须避免：</span>
+            {mustAvoid}
+          </p>
+        )}
+        {focusPoints.length > 0 && (
+          <p>
+            <span className="text-black/45">聚焦要点：</span>
+            {focusPoints.join("、")}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DirectorPlanPreview({
+  plan,
+  meta,
+  warning,
+}: {
+  plan: DirectorPlan;
+  meta: AnalysisMeta | null;
+  warning?: string | null;
+}) {
+  const productIdentity = pickSection(plan, "productIdentity");
+  const styleDirection = pickSection(plan, "styleDirection");
+  const productLock = pickSection(plan, "productLock");
+  const scenarioDirection = pickSection(plan, "scenarioDirection");
+  const commercialStrategy = pickSection(plan, "commercialStrategy");
+  const factSafety = pickSection(plan, "factSafety");
+  const imagePlanList = Array.isArray(plan.imagePlan)
+    ? (plan.imagePlan as Record<string, unknown>[])
+    : [];
+
+  return (
+    <div className="mx-auto max-w-4xl">
+      <div className="mb-6">
+        <p className="text-sm text-black/35">Oviraq AI · 视觉导演</p>
+        <h2 className="mt-2 text-3xl font-semibold">AI 电商视觉导演方案</h2>
+        <p className="mt-3 text-black/45">请确认导演方案后，点击左侧「确认生成图片」继续出图</p>
+        <AnalysisMetaBadges meta={meta} />
+        {warning && (
+          <div className="mt-4 rounded-[16px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            {warning}
+          </div>
+        )}
+      </div>
+
+      <AnalysisSection title="产品识别">
+        <AnalysisField label="产品名称">{toText(productIdentity.productName) || "—"}</AnalysisField>
+        <AnalysisField label="识别类目">{toText(productIdentity.category) || "—"}</AnalysisField>
+        <AnalysisField label="子类目">{toText(productIdentity.subCategory) || "—"}</AnalysisField>
+        <AnalysisField label="产品形态">{toText(productIdentity.productForm) || "—"}</AnalysisField>
+        <AnalysisField label="使用场景">{toText(productIdentity.useCase) || "—"}</AnalysisField>
+      </AnalysisSection>
+
+      <AnalysisSection title="风格方向">
+        <AnalysisField label="风格 DNA">
+          <TagList items={toList(styleDirection.styleDNA)} />
+        </AnalysisField>
+        <AnalysisField label="视觉关键词">
+          <TagList items={toList(styleDirection.visualKeywords)} />
+        </AnalysisField>
+        <AnalysisField label="调性关键词">
+          <TagList items={toList(styleDirection.toneKeywords)} />
+        </AnalysisField>
+        <AnalysisField label="平台策略">{toText(styleDirection.platformStrategy) || "—"}</AnalysisField>
+      </AnalysisSection>
+
+      <AnalysisSection title="结构锁定">
+        <AnalysisField label="可见结构">{toList(productLock.visibleStructure).join("、") || "—"}</AnalysisField>
+        <AnalysisField label="可见材质">{toList(productLock.visibleMaterials).join("、") || "—"}</AnalysisField>
+        <AnalysisField label="可见颜色">{toList(productLock.visibleColors).join("、") || "—"}</AnalysisField>
+        <AnalysisField label="可见图案">{toList(productLock.visiblePatterns).join("、") || "—"}</AnalysisField>
+        <AnalysisField label="组件关系">{toText(productLock.componentRelationship) || "—"}</AnalysisField>
+        <AnalysisField label="功能机制">{toText(productLock.functionalMechanism) || "—"}</AnalysisField>
+        <AnalysisField label="结构风险">{toList(productLock.structureRisks).join("、") || "—"}</AnalysisField>
+        <AnalysisField label="禁止改动">{toList(productLock.forbiddenChanges).join("、") || "—"}</AnalysisField>
+      </AnalysisSection>
+
+      <AnalysisSection title="场景策略">
+        <AnalysisField label="推荐场景">{toList(scenarioDirection.recommendedScenes).join("、") || "—"}</AnalysisField>
+        <AnalysisField label="禁止场景">{toList(scenarioDirection.forbiddenScenes).join("、") || "—"}</AnalysisField>
+        <AnalysisField label="推荐道具">{toList(scenarioDirection.propRecommendations).join("、") || "—"}</AnalysisField>
+        <AnalysisField label="避免道具">{toList(scenarioDirection.propAvoidance).join("、") || "—"}</AnalysisField>
+        <AnalysisField label="背景指导">{toText(scenarioDirection.backgroundGuidance) || "—"}</AnalysisField>
+      </AnalysisSection>
+
+      <AnalysisSection title="商业卖点">
+        <AnalysisField label="核心卖点">{toList(commercialStrategy.coreSellingPoints).join("、") || "—"}</AnalysisField>
+        <AnalysisField label="情绪卖点">{toList(commercialStrategy.emotionalSellingPoints).join("、") || "—"}</AnalysisField>
+        <AnalysisField label="礼赠属性">{toList(commercialStrategy.giftingAttributes).join("、") || "—"}</AnalysisField>
+        <AnalysisField label="转化焦点">{toText(commercialStrategy.conversionFocus) || "—"}</AnalysisField>
+      </AnalysisSection>
+
+      <AnalysisSection title="事实安全">
+        <AnalysisField label="客观事实">{toList(factSafety.objectiveFacts).join("、") || "—"}</AnalysisField>
+        <AnalysisField label="缺失事实">{toList(factSafety.missingFacts).join("、") || "—"}</AnalysisField>
+      </AnalysisSection>
+
+      {toText(factSafety.factSafetyNote) && (
+        <div className="mt-4 rounded-[20px] border border-black/8 bg-[#fafafa] p-4">
+          <h3 className="text-xs font-medium text-black/45">事实参数规则</h3>
+          <p className="mt-2 text-sm leading-6 text-black/75">{toText(factSafety.factSafetyNote)}</p>
+        </div>
+      )}
+
+      {imagePlanList.length > 0 && (
+        <div className="mt-6">
+          <h3 className="mb-3 text-sm font-semibold">图组规划</h3>
+          <div className="grid gap-4">
+            {imagePlanList.map((item, index) => (
+              <DirectorImagePlanCard key={`director-plan-${index}`} item={item} index={index} />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AnalysisPreview({
+  analysis,
+  directorPlan,
+  meta,
+  warning,
+}: {
+  analysis: ProductAnalysis | null;
+  directorPlan: DirectorPlan | null;
+  meta: AnalysisMeta | null;
+  warning?: string | null;
+}) {
+  if (directorPlan) {
+    return <DirectorPlanPreview plan={directorPlan} meta={meta} warning={warning} />;
+  }
+
+  if (analysis) {
+    return <LegacyAnalysisPreview analysis={analysis} meta={meta} warning={warning} />;
+  }
+
+  return null;
 }
 
 function Analyzing({ step }: { step: number }) {
@@ -1098,14 +1528,14 @@ function resolveResultImages({
 function ResultImageCard({
   url,
   index,
-  planItem,
+  display,
   aspectClass,
   isPrimary,
   onPreview,
 }: {
   url: string;
   index: number;
-  planItem: ImageUsagePlanItem;
+  display: ResultCardDisplay;
   aspectClass: string;
   isPrimary?: boolean;
   onPreview: (index: number) => void;
@@ -1114,16 +1544,22 @@ function ResultImageCard({
     <article className="w-full overflow-hidden rounded-[20px] border border-black/8 bg-white shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg">
       <div className="border-b border-black/6 px-3 py-2">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-semibold tracking-wide text-black">{planItem.indexLabel}</span>
-          <span
-            className={`rounded-full px-2 py-0.5 text-[10px] font-medium text-white ${
-              isPrimary ? "bg-black ring-1 ring-black/15" : "bg-black/85"
-            }`}
-          >
-            {planItem.usage}
+          <span className="text-xs font-semibold tracking-wide text-black">
+            {display.indexLabel} {display.title}
           </span>
+          {display.badge && display.badge !== display.title && (
+            <span
+              className={`rounded-full px-2 py-0.5 text-[10px] font-medium text-white ${
+                isPrimary ? "bg-black ring-1 ring-black/15" : "bg-black/85"
+              }`}
+            >
+              {display.badge}
+            </span>
+          )}
         </div>
-        <p className="mt-1 line-clamp-2 text-xs leading-snug text-black/50">{planItem.description}</p>
+        {display.description && (
+          <p className="mt-1 line-clamp-2 text-xs leading-snug text-black/50">{display.description}</p>
+        )}
       </div>
 
       <div className="p-3 pt-2">
@@ -1137,7 +1573,7 @@ function ResultImageCard({
           >
             <img
               src={url}
-              alt={`${planItem.usage} ${planItem.indexLabel}`}
+              alt={`${display.title} ${display.indexLabel}`}
               className="h-full w-full object-contain transition duration-300 group-hover:scale-[1.02]"
             />
           </button>
@@ -1182,6 +1618,8 @@ function Results({
   imageUrl,
   modelName,
   aspectRatio,
+  directorPlan,
+  productAnalysis,
   onBack,
   onPreview,
 }: {
@@ -1191,12 +1629,14 @@ function Results({
   imageUrl?: string;
   modelName: string;
   aspectRatio: string;
+  directorPlan?: DirectorPlan | null;
+  productAnalysis?: ProductAnalysis | null;
   onBack: () => void;
   onPreview: (i: number) => void;
 }) {
   const displayImages = resolveResultImages({ images, generatedImages, imageUrls, imageUrl });
   const actualImageCount = displayImages.length || 1;
-  const usagePlan = getImageUsagePlan(displayImages.length || 1);
+  const activeDirectorPlan = resolveActiveDirectorPlan(directorPlan ?? null, productAnalysis ?? null);
   const aspectClass = getResultAspectClass(aspectRatio);
   const isSingleResult = displayImages.length === 1;
 
@@ -1239,15 +1679,14 @@ function Results({
           }
         >
           {displayImages.map((url, index) => {
-            const planItem = usagePlan[index];
-            if (!planItem) return null;
+            const display = getResultCardDisplay(index, activeDirectorPlan);
 
             return (
               <ResultImageCard
                 key={`${url}-${index}`}
                 url={url}
                 index={index}
-                planItem={planItem}
+                display={display}
                 aspectClass={aspectClass}
                 isPrimary={index === 0}
                 onPreview={onPreview}
