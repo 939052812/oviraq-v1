@@ -375,7 +375,11 @@ export default function Home() {
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [previewImageIndex, setPreviewImageIndex] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const mainSectionRef = useRef<HTMLElement>(null);
+  const generateAbortRef = useRef<AbortController | null>(null);
+  const generationRequestIdRef = useRef(0);
 
   const quantityOptions = getQuantityOptions(imageType);
   const productImagesKey = productImages
@@ -436,6 +440,62 @@ export default function Home() {
 
   function removeProductImage(index: number) {
     setProductImages((prev) => prev.filter((_, i) => i !== index));
+    setPreviewImageIndex((current) => {
+      if (current === null) return null;
+      if (current === index) return null;
+      if (current > index) return current - 1;
+      return current;
+    });
+  }
+
+  function handleBackFromAnalysis() {
+    setStage("idle");
+  }
+
+  function handleBackToAnalysisPlan() {
+    if (productAnalysis || directorPlan) {
+      setStage("analysis");
+    }
+  }
+
+  function handleCancelGenerate() {
+    generationRequestIdRef.current += 1;
+    generateAbortRef.current?.abort();
+    generateAbortRef.current = null;
+    setIsGenerating(false);
+    if (productAnalysis || directorPlan) {
+      setStage("analysis");
+    } else {
+      setStage("idle");
+    }
+  }
+
+  function handleNewProject() {
+    generationRequestIdRef.current += 1;
+    generateAbortRef.current?.abort();
+    generateAbortRef.current = null;
+
+    setStage("idle");
+    setPreview(null);
+    setPreviewImageIndex(null);
+    setAnalyzingStep(0);
+    setImageType("main");
+    setOpenSelectId(null);
+    setPlatform("智能匹配");
+    setLanguage("no_text");
+    setModel(MODEL_LABEL);
+    setSelectedRatio("1:1 正方形");
+    setQuality("标准");
+    setQuantity("3 张");
+    setProductInfo("");
+    setGeneratedImages([]);
+    setProductImages([]);
+    clearAnalysisState();
+    setIsAnalyzing(false);
+    setIsGenerating(false);
+
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    mainSectionRef.current?.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function buildAnalyzeFormData() {
@@ -520,6 +580,11 @@ export default function Home() {
     setIsGenerating(true);
     setStage("generating");
 
+    const requestId = generationRequestIdRef.current + 1;
+    generationRequestIdRef.current = requestId;
+    const abortController = new AbortController();
+    generateAbortRef.current = abortController;
+
     const count = parseCount(quantity, imageType);
     const aspectRatio = parseAspectRatio(selectedRatio);
     const qualityValue = mapQuality(quality);
@@ -570,10 +635,15 @@ export default function Home() {
       const res = await fetch(`${API_BASE}/auto-generate-product`, {
         method: "POST",
         body: formData,
+        signal: abortController.signal,
       });
+
+      if (generationRequestIdRef.current !== requestId) return;
 
       const data = await res.json();
       const urls = extractImageUrls(data);
+
+      if (generationRequestIdRef.current !== requestId) return;
 
       if (urls.length > 0) {
         setGeneratedImages(urls);
@@ -584,19 +654,19 @@ export default function Home() {
         setStage("analysis");
       }
     } catch (error) {
+      if (abortController.signal.aborted || generationRequestIdRef.current !== requestId) return;
       console.error(error);
       alert("请求失败，请稍后重试");
       setStage("analysis");
     } finally {
-      setIsGenerating(false);
+      if (generationRequestIdRef.current === requestId) {
+        setIsGenerating(false);
+        generateAbortRef.current = null;
+      }
     }
   }
 
   function handlePrimaryAction() {
-    if (productAnalysis || directorPlan) {
-      void generateImages();
-      return;
-    }
     void handleAnalyzeProduct();
   }
 
@@ -605,7 +675,7 @@ export default function Home() {
     : isAnalyzing
       ? "正在分析..."
       : productAnalysis || directorPlan
-        ? "确认生成图片"
+        ? "重新分析产品"
         : "分析产品";
 
   useEffect(() => {
@@ -622,7 +692,10 @@ export default function Home() {
 
   useEffect(() => {
     function close(e: KeyboardEvent) {
-      if (e.key === "Escape") setPreview(null);
+      if (e.key === "Escape") {
+        setPreview(null);
+        setPreviewImageIndex(null);
+      }
     }
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
@@ -675,15 +748,29 @@ export default function Home() {
                       key={`${productImages[index]?.name}-${productImages[index]?.lastModified}-${index}`}
                       className="relative aspect-square"
                     >
-                      <img
-                        src={url}
-                        alt={`商品图 ${index + 1}`}
-                        className="h-full w-full rounded-[12px] object-cover"
-                      />
                       <button
                         type="button"
-                        onClick={() => removeProductImage(index)}
-                        className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-xs text-white hover:bg-black/80"
+                        onClick={() => setPreviewImageIndex(index)}
+                        className="group relative block h-full w-full cursor-pointer overflow-hidden rounded-[12px] text-left"
+                      >
+                        <img
+                          src={url}
+                          alt={`商品图 ${index + 1}`}
+                          className="h-full w-full rounded-[12px] object-cover transition duration-200 group-hover:scale-[1.04] group-hover:shadow-md"
+                        />
+                        <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-[12px] border border-transparent transition duration-200 group-hover:border-black/15 group-hover:bg-black/35">
+                          <span className="rounded-full bg-white/90 px-2.5 py-1 text-[10px] font-medium text-black opacity-0 transition duration-200 group-hover:opacity-100">
+                            点击预览
+                          </span>
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          removeProductImage(index);
+                        }}
+                        className="absolute right-1 top-1 z-20 flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-xs text-white hover:bg-black/80"
                         aria-label={`删除商品图 ${index + 1}`}
                       >
                         ×
@@ -806,16 +893,56 @@ export default function Home() {
             />
           </div>
 
-          <button
-            onClick={handlePrimaryAction}
-            disabled={isAnalyzing || isGenerating}
-            className="mt-5 h-12 w-full rounded-full bg-black text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:bg-black/40 disabled:hover:opacity-100"
-          >
-            {primaryButtonLabel}
-          </button>
+          <div className="mt-5 space-y-3">
+            {stage === "results" ? (
+              <>
+                <button
+                  type="button"
+                  onClick={handleNewProject}
+                  className="h-12 w-full rounded-full bg-black text-sm font-semibold text-white transition-opacity hover:opacity-90"
+                >
+                  新建项目
+                </button>
+                <button
+                  type="button"
+                  onClick={handleBackToAnalysisPlan}
+                  className="h-12 w-full rounded-full border border-black/10 bg-[#fafafa] text-sm transition-colors hover:bg-white"
+                >
+                  返回视觉方案
+                </button>
+              </>
+            ) : stage === "analysis" ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => void generateImages()}
+                  disabled={isGenerating}
+                  className="h-12 w-full rounded-full bg-black text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:bg-black/40 disabled:hover:opacity-100"
+                >
+                  确认生成图片
+                </button>
+                <button
+                  type="button"
+                  onClick={handleBackFromAnalysis}
+                  className="h-12 w-full rounded-full border border-black/10 bg-[#fafafa] text-sm transition-colors hover:bg-white"
+                >
+                  返回上一步
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={handlePrimaryAction}
+                disabled={isAnalyzing || isGenerating}
+                className="h-12 w-full rounded-full bg-black text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:bg-black/40 disabled:hover:opacity-100"
+              >
+                {primaryButtonLabel}
+              </button>
+            )}
+          </div>
         </aside>
 
-        <section className="min-w-0 flex-1 overflow-y-auto rounded-[30px] bg-white p-8 shadow-sm">
+        <section ref={mainSectionRef} className="min-w-0 flex-1 overflow-y-auto rounded-[30px] bg-white p-8 shadow-sm">
           {stage === "idle" && !analysisError && <EmptyState imageType={imageType} />}
           {stage === "idle" && analysisError && (
             <AnalysisError message={analysisError} onRetry={() => void handleAnalyzeProduct()} />
@@ -829,7 +956,7 @@ export default function Home() {
               warning={analysisError}
             />
           )}
-          {stage === "generating" && <Generating />}
+          {stage === "generating" && <Generating onCancel={handleCancelGenerate} />}
           {stage === "results" && (
             <Results
               images={generatedImages}
@@ -838,12 +965,59 @@ export default function Home() {
               aspectRatio={parseAspectRatio(selectedRatio)}
               directorPlan={directorPlan}
               productAnalysis={productAnalysis}
-              onBack={() => setStage(productAnalysis ? "analysis" : "idle")}
+              onRegenerate={() => void generateImages()}
               onPreview={setPreview}
             />
           )}
         </section>
       </div>
+
+      {previewImageIndex !== null && previewUrls.length > 0 && (
+        <div
+          onClick={() => setPreviewImageIndex(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md"
+        >
+          <button
+            type="button"
+            onClick={() => setPreviewImageIndex(null)}
+            className="absolute right-6 top-6 rounded-full bg-white/15 px-4 py-2 text-white"
+          >
+            ×
+          </button>
+          {previewUrls.length > 1 && (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                setPreviewImageIndex(
+                  (previewImageIndex + previewUrls.length - 1) % previewUrls.length
+                );
+              }}
+              className="absolute left-6 rounded-full bg-white/15 px-4 py-3 text-white"
+            >
+              ‹
+            </button>
+          )}
+          <img
+            onClick={(event) => event.stopPropagation()}
+            src={previewUrls[previewImageIndex]}
+            className="max-h-[85vh] max-w-[90vw] rounded-[28px] object-contain"
+            alt={`商品图 ${previewImageIndex + 1}`}
+          />
+          {previewUrls.length > 1 && (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                setPreviewImageIndex((previewImageIndex + 1) % previewUrls.length);
+              }}
+              className="absolute right-6 rounded-full bg-white/15 px-4 py-3 text-white"
+            >
+              ›
+            </button>
+          )}
+        </div>
+      )}
 
       {preview !== null && generatedImages.length > 0 && (
         <div onClick={() => setPreview(null)} className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md">
@@ -1492,7 +1666,7 @@ function Schemes({ onGenerate }: { onGenerate: () => void }) {
   );
 }
 
-function Generating() {
+function Generating({ onCancel }: { onCancel: () => void }) {
   return (
     <div>
       <p className="text-sm text-black/35">Oviraq AI · 生成中</p>
@@ -1503,6 +1677,13 @@ function Generating() {
           <div key={i} className="h-[340px] animate-pulse rounded-[28px] bg-gradient-to-br from-[#eeeeef] to-[#fafafa]" />
         ))}
       </div>
+      <button
+        type="button"
+        onClick={onCancel}
+        className="mt-8 inline-flex h-12 items-center justify-center rounded-full border border-black/10 px-8 text-sm"
+      >
+        取消生成
+      </button>
     </div>
   );
 }
@@ -1620,7 +1801,7 @@ function Results({
   aspectRatio,
   directorPlan,
   productAnalysis,
-  onBack,
+  onRegenerate,
   onPreview,
 }: {
   images?: string[];
@@ -1631,7 +1812,7 @@ function Results({
   aspectRatio: string;
   directorPlan?: DirectorPlan | null;
   productAnalysis?: ProductAnalysis | null;
-  onBack: () => void;
+  onRegenerate: () => void;
   onPreview: (i: number) => void;
 }) {
   const displayImages = resolveResultImages({ images, generatedImages, imageUrls, imageUrl });
@@ -1667,7 +1848,13 @@ function Results({
             已生成 {actualImageCount} 张符合平台策略的商业视觉内容
           </p>
         </div>
-        <button className="shrink-0 rounded-full bg-black px-5 py-3 text-sm text-white">再次生成</button>
+        <button
+          type="button"
+          onClick={onRegenerate}
+          className="shrink-0 rounded-full bg-black px-5 py-3 text-sm text-white"
+        >
+          再次生成
+        </button>
       </div>
 
       <div className={isSingleResult ? "mt-8 max-w-[520px]" : "mt-8"}>
@@ -1695,14 +1882,6 @@ function Results({
           })}
         </div>
       </div>
-
-      <button
-        type="button"
-        onClick={onBack}
-        className="mt-8 inline-flex h-12 w-auto max-w-[240px] items-center justify-center rounded-full border border-black/10 px-8 text-sm"
-      >
-        返回视觉方案
-      </button>
     </div>
   );
 }
