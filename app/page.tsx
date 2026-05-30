@@ -32,11 +32,8 @@ const ratioOptions = [
   "3:2 横版",
   "3:4 竖版",
   "4:3 横版",
-  "4:5 竖版",
-  "5:4 横版",
   "9:16 竖屏",
   "16:9 宽屏",
-  "21:9 超宽屏",
 ];
 const qualityOptions = ["标准", "高清", "超清"];
 const API_BASE = "http://45.32.250.250:3001";
@@ -52,6 +49,8 @@ function parseAspectRatio(ratioLabel: string): string {
 }
 
 function getResultAspectClass(aspectRatio: string): string {
+  if (aspectRatio === "2:3") return "aspect-[2/3]";
+  if (aspectRatio === "3:2") return "aspect-[3/2]";
   if (aspectRatio === "3:4") return "aspect-[3/4]";
   if (aspectRatio === "4:3") return "aspect-[4/3]";
   if (aspectRatio === "9:16") return "aspect-[9/16]";
