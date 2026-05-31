@@ -310,6 +310,329 @@ function formatFactsDisplay(...sources: unknown[]): string {
   return unique.length > 0 ? unique.join("、") : DISPLAY_EMPTY;
 }
 
+const INTERNAL_FACT_TOKENS = new Set([
+  "image_label",
+  "medium",
+  "user_text",
+  "packaging_text",
+  "source",
+  "type",
+  "label",
+  "visible_text",
+  "ocr",
+  "image",
+  "unknown",
+]);
+
+const KNOWN_FACT_LABELS = new Set(["容量", "重量", "尺寸", "材质", "规格", "颜色", "净含量", "成分"]);
+
+type AggregatedFactsPlanInput = {
+  directorPlan?: DirectorPlan | null;
+  productAnalysis?: ProductAnalysis | null;
+};
+
+type ParsedFactItem = {
+  label?: string;
+  value: string;
+};
+
+type FactToken =
+  | { kind: "pair"; label: string; value: string }
+  | { kind: "label"; text: string }
+  | { kind: "value"; text: string };
+
+function isInternalFactToken(text: string): boolean {
+  return INTERNAL_FACT_TOKENS.has(text.trim().toLowerCase());
+}
+
+function normalizeFactText(text: string): string {
+  return sanitizeDisplayText(text);
+}
+
+function normalizeVolumeValue(text: string): string {
+  const trimmed = text.trim();
+  const match = trimmed.match(/^(\d+(?:\.\d+)?)\s*(ml|l|毫升|升)$/i);
+  if (!match) return trimmed;
+  const unit = match[2].toLowerCase();
+  if (unit === "毫升") return `${match[1]}ML`;
+  if (unit === "升") return `${match[1]}L`;
+  return `${match[1]}${match[2].toUpperCase()}`;
+}
+
+function normalizeFactValue(text: string): string {
+  const trimmed = normalizeFactText(text);
+  if (looksLikeVolumeValue(trimmed)) return normalizeVolumeValue(trimmed);
+  return trimmed;
+}
+
+function looksLikeVolumeValue(text: string): boolean {
+  return /^\d+(\.\d+)?\s*(ml|l|毫升|升)$/i.test(text.trim());
+}
+
+function looksLikeMeasurementValue(text: string): boolean {
+  return /^\d+(\.\d+)?\s*(g|kg|克|千克|cm|mm|m|寸)$/i.test(text.trim());
+}
+
+function isFactLabelCandidate(text: string): boolean {
+  const normalized = normalizeFactText(text);
+  if (!normalized || isInternalFactToken(normalized)) return false;
+  if (KNOWN_FACT_LABELS.has(normalized)) return true;
+  if (/\d/.test(normalized)) return false;
+  return normalized.length <= 6;
+}
+
+function formatFactPair(label: string, value: string): string {
+  return `${normalizeFactText(label)}：${normalizeFactValue(value)}`;
+}
+
+function isCompatibleFactPair(label: string, value: string): boolean {
+  if (label === "容量") return looksLikeVolumeValue(value);
+  if (label === "重量") return /^\d+(\.\d+)?\s*(g|kg|克|千克)$/i.test(value.trim());
+  if (label === "尺寸") return /^\d+(\.\d+)?\s*(cm|mm|m|寸)$/i.test(value.trim());
+  if (label === "材质") return !looksLikeVolumeValue(value) && !looksLikeMeasurementValue(value);
+  return true;
+}
+
+function parseFactItem(value: unknown): ParsedFactItem | null {
+  if (value === null || value === undefined) return null;
+
+  if (typeof value === "string") {
+    const text = sanitizeDisplayText(value);
+    if (!text || text === DISPLAY_EMPTY || text.includes(INVALID_OBJECT_TEXT) || isInternalFactToken(text)) {
+      return null;
+    }
+    if (/[:：]/.test(text)) {
+      const separatorIndex = text.search(/[:：]/);
+      const label = text.slice(0, separatorIndex).trim();
+      const factValue = text.slice(separatorIndex + 1).trim();
+      if (label && factValue && !isInternalFactToken(label) && !isInternalFactToken(factValue)) {
+        return { label, value: factValue };
+      }
+    }
+    return { value: text };
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return { value: String(value) };
+  }
+
+  if (Array.isArray(value)) return null;
+
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const typeText = sanitizeDisplayText(formatDisplayValueCore(record.type));
+    const labelText = sanitizeDisplayText(formatDisplayValueCore(record.label));
+    const nameText = sanitizeDisplayText(formatDisplayValueCore(record.name));
+    const prefix =
+      (typeText && !isInternalFactToken(typeText) ? typeText : "") ||
+      (labelText && !isInternalFactToken(labelText) ? labelText : "") ||
+      (nameText && !isInternalFactToken(nameText) ? nameText : "");
+
+    for (const detailKey of ["value", "text", "content", "source", "amount"]) {
+      if (!(detailKey in record)) continue;
+      let detailText = sanitizeDisplayText(formatDisplayValueCore(record[detailKey]));
+      if (detailKey === "amount" && record.unit !== null && record.unit !== undefined) {
+        detailText = `${detailText}${sanitizeDisplayText(formatDisplayValueCore(record.unit))}`;
+      }
+      if (!detailText || detailText.includes(INVALID_OBJECT_TEXT) || isInternalFactToken(detailText)) continue;
+      if (prefix) return { label: prefix, value: detailText };
+      return { value: detailText };
+    }
+
+    const nested = sanitizeDisplayText(formatDisplayValueCore(record));
+    if (nested && !nested.includes(INVALID_OBJECT_TEXT) && !isInternalFactToken(nested)) {
+      return { value: nested };
+    }
+  }
+
+  return null;
+}
+
+function collectRawFactItems(value: unknown): ParsedFactItem[] {
+  if (value === null || value === undefined) return [];
+  if (Array.isArray(value)) return value.flatMap((item) => collectRawFactItems(item));
+
+  const parsed = parseFactItem(value);
+  if (!parsed) return [];
+  if (parsed.label && parsed.value) return [parsed];
+  if (parsed.value) return [{ value: parsed.value }];
+  return [];
+}
+
+function tokenizeFactItems(items: ParsedFactItem[]): FactToken[] {
+  const tokens: FactToken[] = [];
+
+  for (const item of items) {
+    if (item.label && item.value) {
+      const label = normalizeFactText(item.label);
+      const value = normalizeFactValue(item.value);
+      if (label && value && !isInternalFactToken(label) && !isInternalFactToken(value)) {
+        tokens.push({ kind: "pair", label, value });
+      }
+      continue;
+    }
+
+    const text = normalizeFactText(item.value);
+    if (!text || text === DISPLAY_EMPTY || text.includes(INVALID_OBJECT_TEXT) || isInternalFactToken(text)) {
+      continue;
+    }
+
+    if (looksLikeVolumeValue(text) || looksLikeMeasurementValue(text) || /^\d/.test(text)) {
+      tokens.push({ kind: "value", text: normalizeFactValue(text) });
+      continue;
+    }
+
+    if (isFactLabelCandidate(text)) {
+      tokens.push({ kind: "label", text });
+      continue;
+    }
+
+    tokens.push({ kind: "value", text });
+  }
+
+  return tokens;
+}
+
+function dedupeFactResults(results: string[]): string[] {
+  const pairs = results.filter((item) => item.includes("："));
+  const subsumedLabels = new Set<string>();
+  const subsumedValues = new Set<string>();
+
+  for (const pair of pairs) {
+    const separatorIndex = pair.indexOf("：");
+    const label = pair.slice(0, separatorIndex).trim();
+    const value = pair.slice(separatorIndex + 1).trim();
+    if (!label || !value) continue;
+    subsumedLabels.add(label.toLowerCase());
+    subsumedValues.add(value.toLowerCase());
+    subsumedValues.add(normalizeFactValue(value).toLowerCase());
+  }
+
+  const seen = new Set<string>();
+  const final: string[] = [];
+
+  for (const item of results) {
+    const normalizedItem = normalizeFactText(item);
+    if (!normalizedItem || normalizedItem.includes(INVALID_OBJECT_TEXT) || isInternalFactToken(normalizedItem)) {
+      continue;
+    }
+
+    if (!item.includes("：")) {
+      const lower = normalizedItem.toLowerCase();
+      const normalizedValue = normalizeFactValue(normalizedItem).toLowerCase();
+      if (subsumedLabels.has(lower) || subsumedValues.has(lower) || subsumedValues.has(normalizedValue)) {
+        continue;
+      }
+    }
+
+    const dedupeKey = item.includes("：")
+      ? (() => {
+          const separatorIndex = item.indexOf("：");
+          return formatFactPair(item.slice(0, separatorIndex), item.slice(separatorIndex + 1)).toLowerCase();
+        })()
+      : normalizeFactValue(normalizedItem).toLowerCase();
+
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    final.push(
+      item.includes("：")
+        ? (() => {
+            const separatorIndex = item.indexOf("：");
+            return formatFactPair(item.slice(0, separatorIndex), item.slice(separatorIndex + 1));
+          })()
+        : normalizedItem
+    );
+  }
+
+  return final;
+}
+
+function mergeFactTokens(tokens: FactToken[]): string[] {
+  const results: string[] = [];
+  const looseLabels: string[] = [];
+  const looseValues: string[] = [];
+
+  for (const token of tokens) {
+    if (token.kind === "pair") {
+      results.push(formatFactPair(token.label, token.value));
+      continue;
+    }
+    if (token.kind === "label") {
+      looseLabels.push(token.text);
+      continue;
+    }
+    looseValues.push(token.text);
+  }
+
+  const usedLabelIndexes = new Set<number>();
+  const usedValueIndexes = new Set<number>();
+
+  for (let labelIndex = 0; labelIndex < looseLabels.length; labelIndex++) {
+    const label = looseLabels[labelIndex];
+    for (let valueIndex = 0; valueIndex < looseValues.length; valueIndex++) {
+      if (usedValueIndexes.has(valueIndex)) continue;
+      const value = looseValues[valueIndex];
+      if (!isCompatibleFactPair(label, value)) continue;
+      results.push(formatFactPair(label, value));
+      usedLabelIndexes.add(labelIndex);
+      usedValueIndexes.add(valueIndex);
+      break;
+    }
+  }
+
+  for (let valueIndex = 0; valueIndex < looseValues.length; valueIndex++) {
+    if (usedValueIndexes.has(valueIndex)) continue;
+    const value = looseValues[valueIndex];
+    if (looksLikeVolumeValue(value)) {
+      results.push(formatFactPair("容量", value));
+      usedValueIndexes.add(valueIndex);
+    }
+  }
+
+  const remainingLabels = looseLabels.filter((_, index) => !usedLabelIndexes.has(index));
+  const remainingValues = looseValues.filter((_, index) => !usedValueIndexes.has(index));
+  for (let index = 0; index < Math.min(remainingLabels.length, remainingValues.length); index++) {
+    results.push(formatFactPair(remainingLabels[index], remainingValues[index]));
+  }
+
+  return dedupeFactResults(results);
+}
+
+function mergeFactItems(items: ParsedFactItem[]): string[] {
+  return mergeFactTokens(tokenizeFactItems(items));
+}
+
+function collectImagePlanVerifiedFacts(plan: unknown): unknown[] {
+  if (!plan || typeof plan !== "object" || Array.isArray(plan)) return [];
+  const imagePlan = (plan as Record<string, unknown>).imagePlan;
+  if (!Array.isArray(imagePlan)) return [];
+  return imagePlan.map((item) => pickSection(item, "copywriting").verifiedFacts);
+}
+
+function getAggregatedObjectiveFacts(input: AggregatedFactsPlanInput): string {
+  const sources: unknown[] = [];
+
+  const pushFactSafetyFacts = (parent: unknown) => {
+    const factSafety = pickSection(parent, "factSafety");
+    sources.push(factSafety.objectiveFacts, factSafety.verifiedFacts, factSafety.visibleFacts);
+  };
+
+  if (input.productAnalysis) {
+    pushFactSafetyFacts(input.productAnalysis);
+    sources.push(input.productAnalysis.objectiveFacts);
+    sources.push(...collectImagePlanVerifiedFacts(input.productAnalysis));
+  }
+
+  if (input.directorPlan) {
+    pushFactSafetyFacts(input.directorPlan);
+    sources.push(...collectImagePlanVerifiedFacts(input.directorPlan));
+  }
+
+  const parsedItems = sources.flatMap((source) => collectRawFactItems(source));
+  const merged = mergeFactItems(parsedItems);
+  return merged.length > 0 ? merged.join("、") : DISPLAY_EMPTY;
+}
+
 const COPYWRITING_INTERNAL_TEXT_PATTERNS = [
   "template_overlay_later",
   "no_text",
@@ -1571,7 +1894,7 @@ function LegacyAnalysisPreview({
     ? (analysis.imagePlan as AnalysisImagePlanItem[])
     : [];
   const factSafetyNote = renderDisplayText(analysis.factSafetyNote);
-  const objectiveFactsDisplay = formatFactsDisplay(analysis.objectiveFacts);
+  const objectiveFactsDisplay = getAggregatedObjectiveFacts({ productAnalysis: analysis });
 
   return (
     <div className="mx-auto max-w-4xl">
@@ -1771,12 +2094,14 @@ function DirectorImagePlanCard({
 
 function DirectorPlanPreview({
   plan,
+  productAnalysis,
   meta,
   warning,
   platform,
   targetLanguage,
 }: {
   plan: DirectorPlan;
+  productAnalysis: ProductAnalysis | null;
   meta: AnalysisMeta | null;
   warning?: string | null;
   platform: string;
@@ -1794,11 +2119,7 @@ function DirectorPlanPreview({
   const productNameDisplay = formatProductNameDisplay(productIdentity.productName, productIdentity.productForm);
   const platformStrategyDisplay = formatPlatformStrategyDisplay(styleDirection.platformStrategy, platform);
   const backgroundGuidanceDisplay = formatBackgroundGuidance(scenarioDirection.backgroundGuidance);
-  const objectiveFactsDisplay = formatFactsDisplay(
-    factSafety.objectiveFacts,
-    factSafety.verifiedFacts,
-    factSafety.visibleFacts
-  );
+  const objectiveFactsDisplay = getAggregatedObjectiveFacts({ directorPlan: plan, productAnalysis });
   const missingFactsDisplay = formatFactsDisplay(factSafety.missingFacts);
   const factSafetyNoteDisplay = renderDisplayText(factSafety.factSafetyNote);
 
@@ -1913,6 +2234,7 @@ function AnalysisPreview({
     return (
       <DirectorPlanPreview
         plan={directorPlan}
+        productAnalysis={analysis}
         meta={meta}
         warning={warning}
         platform={platform}
