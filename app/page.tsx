@@ -633,6 +633,64 @@ function getAggregatedObjectiveFacts(input: AggregatedFactsPlanInput): string {
   return merged.length > 0 ? merged.join("、") : DISPLAY_EMPTY;
 }
 
+function hasUseScenarioValue(value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  if (Array.isArray(value)) return value.some((item) => hasUseScenarioValue(item));
+  if (typeof value === "string") return sanitizeDisplayText(value).length > 0;
+  if (typeof value === "object") {
+    const text = sanitizeDisplayText(formatDisplayValueCore(value));
+    return text.length > 0;
+  }
+  return sanitizeDisplayText(formatDisplayValueCore(value)).length > 0;
+}
+
+function formatUseScenarioValue(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (Array.isArray(value)) {
+    const items = formatDisplayList(value);
+    return items.length > 0 ? items.join("、") : "";
+  }
+  if (typeof value === "string") {
+    return sanitizeDisplayText(value);
+  }
+  const items = formatDisplayList(value);
+  if (items.length > 0) return items.join("、");
+  return sanitizeDisplayText(formatDisplayValueCore(value));
+}
+
+function collectUseScenarioCandidates(parent: unknown): unknown[] {
+  if (!parent || typeof parent !== "object" || Array.isArray(parent)) return [];
+  const record = parent as Record<string, unknown>;
+  const productIdentity = pickSection(parent, "productIdentity");
+  const scenarioDirection = pickSection(parent, "scenarioDirection");
+  return [
+    productIdentity.useScenarios,
+    productIdentity.useScenario,
+    productIdentity.usageScenario,
+    scenarioDirection.useScenarios,
+    record.useScenarios,
+    record.useScenario,
+  ];
+}
+
+function getProductUseScenarios(
+  plan: DirectorPlan | null | undefined,
+  productAnalysis: ProductAnalysis | null | undefined
+): string {
+  const candidates = [
+    ...collectUseScenarioCandidates(plan),
+    ...collectUseScenarioCandidates(productAnalysis),
+  ];
+
+  for (const candidate of candidates) {
+    if (!hasUseScenarioValue(candidate)) continue;
+    const formatted = formatUseScenarioValue(candidate);
+    if (formatted) return formatted;
+  }
+
+  return DISPLAY_EMPTY;
+}
+
 const COPYWRITING_INTERNAL_TEXT_PATTERNS = [
   "template_overlay_later",
   "no_text",
@@ -2117,6 +2175,7 @@ function DirectorPlanPreview({
     ? (plan.imagePlan as Record<string, unknown>[])
     : [];
   const productNameDisplay = formatProductNameDisplay(productIdentity.productName, productIdentity.productForm);
+  const productUseScenariosDisplay = getProductUseScenarios(plan, productAnalysis);
   const platformStrategyDisplay = formatPlatformStrategyDisplay(styleDirection.platformStrategy, platform);
   const backgroundGuidanceDisplay = formatBackgroundGuidance(scenarioDirection.backgroundGuidance);
   const objectiveFactsDisplay = getAggregatedObjectiveFacts({ directorPlan: plan, productAnalysis });
@@ -2142,7 +2201,7 @@ function DirectorPlanPreview({
         <AnalysisField label="识别类目">{formatDisplayValue(productIdentity.category)}</AnalysisField>
         <AnalysisField label="子类目">{formatDisplayValue(productIdentity.subCategory)}</AnalysisField>
         <AnalysisField label="产品形态">{formatDisplayValue(productIdentity.productForm)}</AnalysisField>
-        <AnalysisField label="使用场景">{formatDisplayValue(productIdentity.useCase)}</AnalysisField>
+        <AnalysisField label="使用场景">{productUseScenariosDisplay}</AnalysisField>
       </AnalysisSection>
 
       <AnalysisSection title="风格方向">
