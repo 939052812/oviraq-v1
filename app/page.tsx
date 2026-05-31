@@ -71,47 +71,363 @@ function parseCount(quantityLabel: string, imageType = "main"): number {
   return Math.min(max, Math.max(1, count));
 }
 
-function toText(value: unknown): string {
+const DISPLAY_EMPTY = "—";
+const INVALID_OBJECT_TEXT = "[object Object]";
+
+const OBJECT_DISPLAY_KEYS = [
+  "label",
+  "name",
+  "title",
+  "text",
+  "value",
+  "content",
+  "description",
+  "fact",
+  "type",
+  "source",
+  "amount",
+  "unit",
+  "roleLabel",
+  "roleName",
+  "role",
+  "goal",
+  "sceneDescription",
+  "sceneType",
+  "sceneIntent",
+] as const;
+
+const LAYOUT_FIELD_LABELS: Record<string, string> = {
+  base_image_for_layout: "底图生成",
+  pure_generate: "纯图生成",
+  poster_text_overlay_later: "后期海报排版",
+  annotation_overlay_later: "后期标注排版",
+  selling_point_overlay_later: "后期卖点排版",
+  detail_text_overlay_later: "后期细节说明排版",
+  scene_caption_overlay_later: "后期场景文案排版",
+  parameter_template_later: "后期参数模板排版",
+  parameter_table_overlay_later: "后期参数表排版",
+  notice_template_later: "后期注意事项排版",
+  emotional_poster_overlay_later: "后期情绪海报排版",
+  brand_story_overlay_later: "后期品牌文案排版",
+  summary_overlay_later: "后期总结排版",
+  closing_poster_overlay_later: "后期收尾海报排版",
+  none: "无需排版",
+};
+
+const GENERIC_PRODUCT_NAMES = new Set(["", "电商商品", "商品", "产品", "未识别"]);
+
+function sanitizeDisplayText(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed || trimmed === DISPLAY_EMPTY || trimmed.includes(INVALID_OBJECT_TEXT)) return "";
+  return trimmed;
+}
+
+function hasDisplayValue(value: unknown): boolean {
+  return sanitizeDisplayText(formatDisplayValueCore(value)).length > 0;
+}
+
+function formatPairDisplay(left: unknown, right: unknown): string {
+  const leftText = sanitizeDisplayText(formatDisplayValueCore(left));
+  const rightText = sanitizeDisplayText(formatDisplayValueCore(right));
+  if (leftText && rightText) return `${leftText}：${rightText}`;
+  return leftText || rightText;
+}
+
+function formatDisplayValueCore(value: unknown): string {
   if (value === null || value === undefined) return "";
-  if (typeof value === "string") return value.trim();
-  if (Array.isArray(value)) return value.map(toText).filter(Boolean).join("、");
-  if (typeof value === "object") {
-    const obj = value as Record<string, unknown>;
-    const preferredKeys = [
-      "label",
-      "name",
-      "title",
-      "roleLabel",
-      "roleName",
-      "role",
-      "goal",
-      "sceneDescription",
-      "sceneType",
-      "sceneIntent",
-    ];
-    for (const key of preferredKeys) {
-      if (key in obj) {
-        const text = toText(obj[key]);
-        if (text) return text;
-      }
-    }
-    const joined = Object.values(obj).map(toText).filter(Boolean).join("、");
-    if (joined) return joined;
-    try {
-      const json = JSON.stringify(obj);
-      return json.length > 120 ? `${json.slice(0, 117)}...` : json;
-    } catch {
-      return "";
-    }
+  if (typeof value === "string") return sanitizeDisplayText(value);
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => formatDisplayValueCore(item))
+      .filter(Boolean)
+      .join("、");
   }
-  return String(value).trim();
+
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+
+    const amountText =
+      record.amount !== null && record.amount !== undefined
+        ? sanitizeDisplayText(formatDisplayValueCore(record.amount))
+        : "";
+    const unitText =
+      record.unit !== null && record.unit !== undefined
+        ? sanitizeDisplayText(formatDisplayValueCore(record.unit))
+        : "";
+    if (amountText || unitText) {
+      const combined = `${amountText}${unitText}`;
+      const prefix = sanitizeDisplayText(
+        formatDisplayValueCore(record.type) ||
+          formatDisplayValueCore(record.label) ||
+          formatDisplayValueCore(record.name)
+      );
+      return prefix ? `${prefix}：${combined}` : combined;
+    }
+
+    if ("label" in record && "value" in record) {
+      const pair = formatPairDisplay(record.label, record.value);
+      if (pair) return pair;
+    }
+
+    if ("name" in record && "value" in record) {
+      const pair = formatPairDisplay(record.name, record.value);
+      if (pair) return pair;
+    }
+
+    const typeText = sanitizeDisplayText(formatDisplayValueCore(record.type));
+    for (const detailKey of ["value", "text", "content", "name", "source", "description", "fact"]) {
+      if (!(detailKey in record)) continue;
+      const detailText = sanitizeDisplayText(formatDisplayValueCore(record[detailKey]));
+      if (detailText) return typeText ? `${typeText}：${detailText}` : detailText;
+    }
+
+    for (const key of OBJECT_DISPLAY_KEYS) {
+      if (!(key in record)) continue;
+      const fieldText = sanitizeDisplayText(formatDisplayValueCore(record[key]));
+      if (fieldText) return fieldText;
+    }
+
+    const nested = Object.values(record)
+      .map((item) => formatDisplayValueCore(item))
+      .filter(Boolean);
+
+    if (nested.length > 0) return nested.join("、");
+    return "";
+  }
+
+  return sanitizeDisplayText(String(value));
+}
+
+function formatDisplayValue(value: unknown): string {
+  const text = sanitizeDisplayText(formatDisplayValueCore(value));
+  return text || DISPLAY_EMPTY;
+}
+
+function renderDisplayText(value: unknown): string {
+  return formatDisplayValue(value);
+}
+
+function splitGuidanceItems(text: string): string[] {
+  if (!text) return [];
+  return text
+    .split(/[、,，;；\n]+/)
+    .map((item) => sanitizeDisplayText(item))
+    .filter(Boolean);
+}
+
+function formatDisplayList(value: unknown): string[] {
+  if (value === null || value === undefined) return [];
+
+  if (Array.isArray(value)) {
+    return value
+      .flatMap((item) => {
+        if (typeof item === "string") return splitGuidanceItems(item);
+        const text = sanitizeDisplayText(formatDisplayValueCore(item));
+        return text ? splitGuidanceItems(text) : [];
+      })
+      .filter(Boolean);
+  }
+
+  if (typeof value === "string") return splitGuidanceItems(value);
+
+  const text = sanitizeDisplayText(formatDisplayValueCore(value));
+  return text ? splitGuidanceItems(text) : [];
+}
+
+function formatDisplayJoin(value: unknown): string {
+  const items = formatDisplayList(value);
+  return items.length > 0 ? items.join("、") : DISPLAY_EMPTY;
+}
+
+function toText(value: unknown): string {
+  return formatDisplayValueCore(value);
 }
 
 function toList(value: unknown): string[] {
-  if (value === null || value === undefined) return [];
-  if (Array.isArray(value)) return value.map(toText).filter(Boolean);
-  const text = toText(value);
-  return text ? [text] : [];
+  return formatDisplayList(value);
+}
+
+function safeDisplay(value: unknown): string {
+  return formatDisplayValue(value);
+}
+
+function formatLayoutField(value: unknown): string {
+  const raw = sanitizeDisplayText(formatDisplayValueCore(value));
+  if (!raw) return "";
+  return LAYOUT_FIELD_LABELS[raw] ?? raw;
+}
+
+function formatRenderLayoutDisplay(renderMode: unknown, layoutType: unknown): string {
+  const labels = [formatLayoutField(renderMode), formatLayoutField(layoutType)].filter(Boolean);
+  return [...new Set(labels)].join(" · ");
+}
+
+function formatProductNameDisplay(productName: unknown, productForm: unknown): string {
+  const name = sanitizeDisplayText(formatDisplayValueCore(productName));
+  const form = sanitizeDisplayText(formatDisplayValueCore(productForm));
+  if (name && !GENERIC_PRODUCT_NAMES.has(name)) return name;
+  if (form) return form;
+  return "未识别到明确产品名称";
+}
+
+function formatPlatformStrategyDisplay(value: unknown, platform: string): string {
+  const text = sanitizeDisplayText(formatDisplayValueCore(value));
+  if (text) return text;
+
+  if (platform === "淘宝") {
+    return "适合淘宝商品图组：首图突出点击吸引力，详情图依次补充结构、卖点、材质、场景和参数信息。";
+  }
+
+  return "根据当前平台和商品类型，优先突出主体清晰度、点击吸引力、核心卖点和详情页转化效率。";
+}
+
+function formatBackgroundGuidance(value: unknown, maxItems = 3): string {
+  const items = formatDisplayList(value);
+
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const item of items) {
+    if (seen.has(item)) continue;
+    seen.add(item);
+    unique.push(item);
+  }
+
+  const limited = unique.slice(0, maxItems).join("、");
+  return limited || DISPLAY_EMPTY;
+}
+
+function formatFactsDisplay(...sources: unknown[]): string {
+  const items = sources.flatMap((source) => formatDisplayList(source));
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const item of items) {
+    if (seen.has(item)) continue;
+    seen.add(item);
+    unique.push(item);
+  }
+  return unique.length > 0 ? unique.join("、") : DISPLAY_EMPTY;
+}
+
+const COPYWRITING_INTERNAL_TEXT_PATTERNS = [
+  "template_overlay_later",
+  "no_text",
+  "visual_only",
+  "only use customer-provided facts",
+  "clearly visible product/package/label text",
+  "hide or leave the module empty",
+  "image_label",
+  "medium",
+  "factrule",
+  "verifiedfacts",
+];
+
+const COPYWRITING_CUSTOMER_FIELDS = [
+  "headline",
+  "subheadline",
+  "body",
+  "cta",
+  "notes",
+  "title",
+  "caption",
+  "description",
+] as const;
+
+function isInternalCopywritingText(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) return true;
+  return COPYWRITING_INTERNAL_TEXT_PATTERNS.some((pattern) => normalized.includes(pattern));
+}
+
+function sanitizeCustomerCopywritingText(value: unknown): string {
+  const text = sanitizeDisplayText(formatDisplayValueCore(value));
+  if (!text || isInternalCopywritingText(text)) return "";
+  return text;
+}
+
+function resolveCopywritingTargetLanguage(
+  copywriting: Record<string, unknown>,
+  selectedTargetLanguage: string
+): string {
+  const fromCopywriting = sanitizeDisplayText(formatDisplayValueCore(copywriting.targetLanguage));
+  if (fromCopywriting && !isInternalCopywritingText(fromCopywriting)) return fromCopywriting;
+  return selectedTargetLanguage;
+}
+
+function formatCopywritingTargetLanguageText(targetLanguage: string): string {
+  const normalized = targetLanguage.trim().toLowerCase();
+  if (!normalized || normalized === "no_text" || normalized === "visual_only" || normalized === "无文字") {
+    return "无文字，仅保留商品本身已有标签或包装文字";
+  }
+  if (normalized === "zh" || normalized === "zh-cn") {
+    return "中文文案，后期模板叠加";
+  }
+  if (normalized === "zh-hant") {
+    return "繁体中文文案，后期模板叠加";
+  }
+  if (normalized === "en") {
+    return "英文文案，后期模板叠加";
+  }
+  if (normalized === "ja") {
+    return "日文文案，后期模板叠加";
+  }
+  const languageOption = languageOptions.find((option) => option.value.toLowerCase() === normalized);
+  if (languageOption) {
+    return `按所选语言（${languageOption.label}）后期模板叠加`;
+  }
+  return "按所选语言后期模板叠加";
+}
+
+function formatImagePlanCopywritingLines(copywritingValue: unknown, selectedTargetLanguage: string): string[] {
+  const copywriting =
+    copywritingValue && typeof copywritingValue === "object" && !Array.isArray(copywritingValue)
+      ? (copywritingValue as Record<string, unknown>)
+      : null;
+  if (!copywriting || Object.keys(copywriting).length === 0) return [];
+
+  const lines: string[] = [];
+  const mode = sanitizeDisplayText(formatDisplayValueCore(copywriting.mode));
+  const customerLines = COPYWRITING_CUSTOMER_FIELDS.flatMap((field) => {
+    if (!(field in copywriting)) return [];
+    const text = sanitizeCustomerCopywritingText(copywriting[field]);
+    return text ? [text] : [];
+  });
+
+  if (mode === "template_overlay_later") {
+    lines.push("文案规划：后期模板排版");
+  }
+
+  if (mode === "template_overlay_later" || "targetLanguage" in copywriting || customerLines.length > 0) {
+    const targetLanguage = resolveCopywritingTargetLanguage(copywriting, selectedTargetLanguage);
+    lines.push(`目标文字：${formatCopywritingTargetLanguageText(targetLanguage)}`);
+  }
+
+  lines.push(...customerLines);
+  return lines;
+}
+
+function ImagePlanCopywritingBlock({
+  copywriting,
+  targetLanguage,
+  className = "",
+}: {
+  copywriting: unknown;
+  targetLanguage: string;
+  className?: string;
+}) {
+  const lines = formatImagePlanCopywritingLines(copywriting, targetLanguage);
+  if (lines.length === 0) return null;
+
+  return (
+    <div className={className}>
+      {lines.map((line, lineIndex) => (
+        <p key={`${line}-${lineIndex}`} className={lineIndex > 0 ? "mt-1" : undefined}>
+          {line}
+        </p>
+      ))}
+    </div>
+  );
 }
 
 function visibleTextToList(value: unknown): string[] {
@@ -134,10 +450,13 @@ function pickNestedSection(plan: unknown, ...keys: string[]): Record<string, unk
 }
 
 function formatObjectStates(value: unknown): string {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return toText(value);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return sanitizeDisplayText(formatDisplayValueCore(value));
+  }
+
   return Object.entries(value as Record<string, unknown>)
     .map(([key, item]) => {
-      const text = toText(item);
+      const text = sanitizeDisplayText(formatDisplayValueCore(item));
       return text ? `${key}: ${text}` : "";
     })
     .filter(Boolean)
@@ -953,6 +1272,8 @@ export default function Home() {
               directorPlan={directorPlan}
               meta={analysisMeta}
               warning={analysisError}
+              platform={platform}
+              targetLanguage={language}
             />
           )}
           {stage === "generating" && <Generating onCancel={handleCancelGenerate} />}
@@ -1193,10 +1514,13 @@ function AnalysisSection({
 }
 
 function TagList({ items }: { items: string[] }) {
-  if (items.length === 0) return <>—</>;
+  const safeItems = items
+    .map((item) => sanitizeDisplayText(item))
+    .filter(Boolean);
+  if (safeItems.length === 0) return <>{DISPLAY_EMPTY}</>;
   return (
     <div className="flex flex-wrap gap-2">
-      {items.map((tag) => (
+      {safeItems.map((tag) => (
         <span key={tag} className="rounded-full border border-black/10 px-2.5 py-1 text-xs text-black/70">
           {tag}
         </span>
@@ -1234,21 +1558,20 @@ function LegacyAnalysisPreview({
   analysis,
   meta,
   warning,
+  targetLanguage,
 }: {
   analysis: ProductAnalysis;
   meta: AnalysisMeta | null;
   warning?: string | null;
+  targetLanguage: string;
 }) {
-  const styleDNAList = toList(analysis.styleDNA);
-  const visibleStructureList = toList(analysis.visibleStructure);
-  const visibleMaterialsList = toList(analysis.visibleMaterials);
-  const visibleTextList = visibleTextToList(analysis.visibleText);
-  const recommendedScenesList = toList(analysis.recommendedScenes);
-  const forbiddenScenesList = toList(analysis.forbiddenScenes);
+  const styleDNAList = formatDisplayList(analysis.styleDNA);
+  const visibleTextList = formatDisplayList(analysis.visibleText);
   const imagePlanList = Array.isArray(analysis.imagePlan)
     ? (analysis.imagePlan as AnalysisImagePlanItem[])
     : [];
-  const factSafetyNote = toText(analysis.factSafetyNote);
+  const factSafetyNote = renderDisplayText(analysis.factSafetyNote);
+  const objectiveFactsDisplay = formatFactsDisplay(analysis.objectiveFacts);
 
   return (
     <div className="mx-auto max-w-4xl">
@@ -1265,8 +1588,8 @@ function LegacyAnalysisPreview({
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
-        <AnalysisField label="识别类目">{toText(analysis.category) || "—"}</AnalysisField>
-        <AnalysisField label="产品形态">{toText(analysis.productForm) || "—"}</AnalysisField>
+        <AnalysisField label="识别类目">{formatDisplayValue(analysis.category)}</AnalysisField>
+        <AnalysisField label="产品形态">{formatDisplayValue(analysis.productForm)}</AnalysisField>
         <AnalysisField label="风格方向">
           <TagList items={styleDNAList} />
         </AnalysisField>
@@ -1281,21 +1604,14 @@ function LegacyAnalysisPreview({
             "未识别到清晰可读文字"
           )}
         </AnalysisField>
-        <AnalysisField label="可见结构">
-          {visibleStructureList.length > 0 ? visibleStructureList.join("、") : "—"}
-        </AnalysisField>
-        <AnalysisField label="可见材质">
-          {visibleMaterialsList.length > 0 ? visibleMaterialsList.join("、") : "—"}
-        </AnalysisField>
-        <AnalysisField label="推荐场景">
-          {recommendedScenesList.length > 0 ? recommendedScenesList.join("、") : "—"}
-        </AnalysisField>
-        <AnalysisField label="禁止场景">
-          {forbiddenScenesList.length > 0 ? forbiddenScenesList.join("、") : "—"}
-        </AnalysisField>
+        <AnalysisField label="可见结构">{formatDisplayJoin(analysis.visibleStructure)}</AnalysisField>
+        <AnalysisField label="可见材质">{formatDisplayJoin(analysis.visibleMaterials)}</AnalysisField>
+        <AnalysisField label="推荐场景">{formatDisplayJoin(analysis.recommendedScenes)}</AnalysisField>
+        <AnalysisField label="禁止场景">{formatDisplayJoin(analysis.forbiddenScenes)}</AnalysisField>
+        <AnalysisField label="客观事实">{objectiveFactsDisplay}</AnalysisField>
       </div>
 
-      {factSafetyNote && (
+      {hasDisplayValue(analysis.factSafetyNote) && (
         <div className="mt-4 rounded-[20px] border border-black/8 bg-[#fafafa] p-4">
           <h3 className="text-xs font-medium text-black/45">事实参数规则</h3>
           <p className="mt-2 text-sm leading-6 text-black/75">{factSafetyNote}</p>
@@ -1307,10 +1623,10 @@ function LegacyAnalysisPreview({
           <h3 className="mb-3 text-sm font-semibold">图组规划</h3>
           <div className="grid gap-4">
             {imagePlanList.map((item, index) => {
-              const role = toText(item.role);
-              const goal = toText(item.goal);
-              const mustKeep = toText(item.mustKeep);
-              const mustAvoid = toText(item.mustAvoid);
+              const role = renderDisplayText(item.role);
+              const goal = renderDisplayText(item.goal);
+              const mustKeep = renderDisplayText(item.mustKeep);
+              const mustAvoid = renderDisplayText(item.mustAvoid);
 
               return (
                 <div
@@ -1319,23 +1635,28 @@ function LegacyAnalysisPreview({
                 >
                   <div className="mb-3 flex flex-wrap items-center gap-2">
                     <span className="text-sm font-semibold">#{String(index + 1).padStart(2, "0")}</span>
-                    {role && (
+                    {hasDisplayValue(item.role) && (
                       <span className="rounded-full bg-black px-2.5 py-1 text-[11px] text-white">{role}</span>
                     )}
                   </div>
-                  {goal && (
+                  {hasDisplayValue(item.goal) && (
                     <p className="text-sm leading-6 text-black/75">
                       <span className="text-black/45">目标：</span>
                       {goal}
                     </p>
                   )}
-                  {mustKeep && (
+                  <ImagePlanCopywritingBlock
+                    copywriting={(item as Record<string, unknown>).copywriting}
+                    targetLanguage={targetLanguage}
+                    className="mt-2 text-sm leading-6 text-black/75"
+                  />
+                  {hasDisplayValue(item.mustKeep) && (
                     <p className="mt-2 text-sm leading-6 text-black/75">
                       <span className="text-black/45">必须保留：</span>
                       {mustKeep}
                     </p>
                   )}
-                  {mustAvoid && (
+                  {hasDisplayValue(item.mustAvoid) && (
                     <p className="mt-2 text-sm leading-6 text-black/75">
                       <span className="text-black/45">必须避免：</span>
                       {mustAvoid}
@@ -1351,29 +1672,42 @@ function LegacyAnalysisPreview({
   );
 }
 
-function DirectorImagePlanCard({ item, index }: { item: Record<string, unknown>; index: number }) {
+function DirectorImagePlanCard({
+  item,
+  index,
+  targetLanguage,
+}: {
+  item: Record<string, unknown>;
+  index: number;
+  targetLanguage: string;
+}) {
   const sceneIntent = pickSection(item, "sceneIntent");
   const composition = pickSection(item, "composition");
   const productFocus = pickSection(item, "productFocus");
-  const planIndex = toText(item.index) || String(index + 1).padStart(2, "0");
-  const roleLabel = toText(item.roleLabel);
-  const role = toText(item.role);
-  const goal = toText(item.goal);
-  const renderMode = toText(item.renderMode);
-  const layoutType = toText(item.layoutType);
+  const planIndex = formatDisplayValueCore(item.index) || String(index + 1).padStart(2, "0");
+  const roleLabel = renderDisplayText(item.roleLabel);
+  const role = renderDisplayText(item.role);
+  const goal = renderDisplayText(item.goal);
+  const renderLayoutDisplay = formatRenderLayoutDisplay(item.renderMode, item.layoutType);
   const stateControl = formatObjectStates(item.stateControl);
-  const mustKeep = toText(productFocus.mustKeep);
-  const mustAvoid = toText(productFocus.mustAvoid);
-  const focusPoints = toList(productFocus.focusPoints);
+  const mustKeep = renderDisplayText(productFocus.mustKeep);
+  const mustAvoid = renderDisplayText(productFocus.mustAvoid);
+  const focusPoints = formatDisplayList(productFocus.focusPoints);
+  const sceneIntentDisplay = [sceneIntent.sceneType, sceneIntent.sceneDescription]
+    .map((value) => renderDisplayText(value))
+    .filter((value) => value !== DISPLAY_EMPTY);
+  const compositionDisplay = [composition.cameraAngle, composition.framing, composition.productCoverage]
+    .map((value) => renderDisplayText(value))
+    .filter((value) => value !== DISPLAY_EMPTY);
 
   return (
     <div className="rounded-[20px] border border-black/8 bg-white p-4">
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <span className="text-sm font-semibold">#{planIndex.padStart(2, "0")}</span>
-        {roleLabel && (
+        {hasDisplayValue(item.roleLabel) && (
           <span className="rounded-full bg-black px-2.5 py-1 text-[11px] text-white">{roleLabel}</span>
         )}
-        {role && role !== roleLabel && (
+        {hasDisplayValue(item.role) && role !== roleLabel && (
           <span className="rounded-full border border-black/10 px-2.5 py-1 text-[11px] text-black/70">
             {role}
           </span>
@@ -1381,30 +1715,28 @@ function DirectorImagePlanCard({ item, index }: { item: Record<string, unknown>;
       </div>
 
       <div className="space-y-2 text-sm leading-6 text-black/75">
-        {goal && (
+        {hasDisplayValue(item.goal) && (
           <p>
             <span className="text-black/45">目标：</span>
             {goal}
           </p>
         )}
-        {(renderMode || layoutType) && (
+        {renderLayoutDisplay && (
           <p>
             <span className="text-black/45">渲染 / 布局：</span>
-            {[renderMode, layoutType].filter(Boolean).join(" · ")}
+            {renderLayoutDisplay}
           </p>
         )}
-        {(toText(sceneIntent.sceneType) || toText(sceneIntent.sceneDescription)) && (
+        {sceneIntentDisplay.length > 0 && (
           <p>
             <span className="text-black/45">场景意图：</span>
-            {[toText(sceneIntent.sceneType), toText(sceneIntent.sceneDescription)].filter(Boolean).join(" · ")}
+            {sceneIntentDisplay.join(" · ")}
           </p>
         )}
-        {(toText(composition.cameraAngle) || toText(composition.framing) || toText(composition.productCoverage)) && (
+        {compositionDisplay.length > 0 && (
           <p>
             <span className="text-black/45">构图：</span>
-            {[toText(composition.cameraAngle), toText(composition.framing), toText(composition.productCoverage)]
-              .filter(Boolean)
-              .join(" · ")}
+            {compositionDisplay.join(" · ")}
           </p>
         )}
         {stateControl && (
@@ -1413,13 +1745,14 @@ function DirectorImagePlanCard({ item, index }: { item: Record<string, unknown>;
             {stateControl}
           </p>
         )}
-        {mustKeep && (
+        <ImagePlanCopywritingBlock copywriting={item.copywriting} targetLanguage={targetLanguage} />
+        {hasDisplayValue(productFocus.mustKeep) && (
           <p>
             <span className="text-black/45">必须保留：</span>
             {mustKeep}
           </p>
         )}
-        {mustAvoid && (
+        {hasDisplayValue(productFocus.mustAvoid) && (
           <p>
             <span className="text-black/45">必须避免：</span>
             {mustAvoid}
@@ -1440,10 +1773,14 @@ function DirectorPlanPreview({
   plan,
   meta,
   warning,
+  platform,
+  targetLanguage,
 }: {
   plan: DirectorPlan;
   meta: AnalysisMeta | null;
   warning?: string | null;
+  platform: string;
+  targetLanguage: string;
 }) {
   const productIdentity = pickSection(plan, "productIdentity");
   const styleDirection = pickSection(plan, "styleDirection");
@@ -1454,6 +1791,16 @@ function DirectorPlanPreview({
   const imagePlanList = Array.isArray(plan.imagePlan)
     ? (plan.imagePlan as Record<string, unknown>[])
     : [];
+  const productNameDisplay = formatProductNameDisplay(productIdentity.productName, productIdentity.productForm);
+  const platformStrategyDisplay = formatPlatformStrategyDisplay(styleDirection.platformStrategy, platform);
+  const backgroundGuidanceDisplay = formatBackgroundGuidance(scenarioDirection.backgroundGuidance);
+  const objectiveFactsDisplay = formatFactsDisplay(
+    factSafety.objectiveFacts,
+    factSafety.verifiedFacts,
+    factSafety.visibleFacts
+  );
+  const missingFactsDisplay = formatFactsDisplay(factSafety.missingFacts);
+  const factSafetyNoteDisplay = renderDisplayText(factSafety.factSafetyNote);
 
   return (
     <div className="mx-auto max-w-4xl">
@@ -1470,61 +1817,61 @@ function DirectorPlanPreview({
       </div>
 
       <AnalysisSection title="产品识别">
-        <AnalysisField label="产品名称">{toText(productIdentity.productName) || "—"}</AnalysisField>
-        <AnalysisField label="识别类目">{toText(productIdentity.category) || "—"}</AnalysisField>
-        <AnalysisField label="子类目">{toText(productIdentity.subCategory) || "—"}</AnalysisField>
-        <AnalysisField label="产品形态">{toText(productIdentity.productForm) || "—"}</AnalysisField>
-        <AnalysisField label="使用场景">{toText(productIdentity.useCase) || "—"}</AnalysisField>
+        <AnalysisField label="产品名称">{productNameDisplay}</AnalysisField>
+        <AnalysisField label="识别类目">{formatDisplayValue(productIdentity.category)}</AnalysisField>
+        <AnalysisField label="子类目">{formatDisplayValue(productIdentity.subCategory)}</AnalysisField>
+        <AnalysisField label="产品形态">{formatDisplayValue(productIdentity.productForm)}</AnalysisField>
+        <AnalysisField label="使用场景">{formatDisplayValue(productIdentity.useCase)}</AnalysisField>
       </AnalysisSection>
 
       <AnalysisSection title="风格方向">
         <AnalysisField label="风格 DNA">
-          <TagList items={toList(styleDirection.styleDNA)} />
+          <TagList items={formatDisplayList(styleDirection.styleDNA)} />
         </AnalysisField>
         <AnalysisField label="视觉关键词">
-          <TagList items={toList(styleDirection.visualKeywords)} />
+          <TagList items={formatDisplayList(styleDirection.visualKeywords)} />
         </AnalysisField>
         <AnalysisField label="调性关键词">
-          <TagList items={toList(styleDirection.toneKeywords)} />
+          <TagList items={formatDisplayList(styleDirection.toneKeywords)} />
         </AnalysisField>
-        <AnalysisField label="平台策略">{toText(styleDirection.platformStrategy) || "—"}</AnalysisField>
+        <AnalysisField label="平台策略">{platformStrategyDisplay}</AnalysisField>
       </AnalysisSection>
 
       <AnalysisSection title="结构锁定">
-        <AnalysisField label="可见结构">{toList(productLock.visibleStructure).join("、") || "—"}</AnalysisField>
-        <AnalysisField label="可见材质">{toList(productLock.visibleMaterials).join("、") || "—"}</AnalysisField>
-        <AnalysisField label="可见颜色">{toList(productLock.visibleColors).join("、") || "—"}</AnalysisField>
-        <AnalysisField label="可见图案">{toList(productLock.visiblePatterns).join("、") || "—"}</AnalysisField>
-        <AnalysisField label="组件关系">{toText(productLock.componentRelationship) || "—"}</AnalysisField>
-        <AnalysisField label="功能机制">{toText(productLock.functionalMechanism) || "—"}</AnalysisField>
-        <AnalysisField label="结构风险">{toList(productLock.structureRisks).join("、") || "—"}</AnalysisField>
-        <AnalysisField label="禁止改动">{toList(productLock.forbiddenChanges).join("、") || "—"}</AnalysisField>
+        <AnalysisField label="可见结构">{formatDisplayJoin(productLock.visibleStructure)}</AnalysisField>
+        <AnalysisField label="可见材质">{formatDisplayJoin(productLock.visibleMaterials)}</AnalysisField>
+        <AnalysisField label="可见颜色">{formatDisplayJoin(productLock.visibleColors)}</AnalysisField>
+        <AnalysisField label="可见图案">{formatDisplayJoin(productLock.visiblePatterns)}</AnalysisField>
+        <AnalysisField label="组件关系">{formatDisplayValue(productLock.componentRelationship)}</AnalysisField>
+        <AnalysisField label="功能机制">{formatDisplayValue(productLock.functionalMechanism)}</AnalysisField>
+        <AnalysisField label="结构风险">{formatDisplayJoin(productLock.structureRisks)}</AnalysisField>
+        <AnalysisField label="禁止改动">{formatDisplayJoin(productLock.forbiddenChanges)}</AnalysisField>
       </AnalysisSection>
 
       <AnalysisSection title="场景策略">
-        <AnalysisField label="推荐场景">{toList(scenarioDirection.recommendedScenes).join("、") || "—"}</AnalysisField>
-        <AnalysisField label="禁止场景">{toList(scenarioDirection.forbiddenScenes).join("、") || "—"}</AnalysisField>
-        <AnalysisField label="推荐道具">{toList(scenarioDirection.propRecommendations).join("、") || "—"}</AnalysisField>
-        <AnalysisField label="避免道具">{toList(scenarioDirection.propAvoidance).join("、") || "—"}</AnalysisField>
-        <AnalysisField label="背景指导">{toText(scenarioDirection.backgroundGuidance) || "—"}</AnalysisField>
+        <AnalysisField label="推荐场景">{formatDisplayJoin(scenarioDirection.recommendedScenes)}</AnalysisField>
+        <AnalysisField label="禁止场景">{formatDisplayJoin(scenarioDirection.forbiddenScenes)}</AnalysisField>
+        <AnalysisField label="推荐道具">{formatDisplayJoin(scenarioDirection.propRecommendations)}</AnalysisField>
+        <AnalysisField label="避免道具">{formatDisplayJoin(scenarioDirection.propAvoidance)}</AnalysisField>
+        <AnalysisField label="背景指导">{backgroundGuidanceDisplay}</AnalysisField>
       </AnalysisSection>
 
       <AnalysisSection title="商业卖点">
-        <AnalysisField label="核心卖点">{toList(commercialStrategy.coreSellingPoints).join("、") || "—"}</AnalysisField>
-        <AnalysisField label="情绪卖点">{toList(commercialStrategy.emotionalSellingPoints).join("、") || "—"}</AnalysisField>
-        <AnalysisField label="礼赠属性">{toList(commercialStrategy.giftingAttributes).join("、") || "—"}</AnalysisField>
-        <AnalysisField label="转化焦点">{toText(commercialStrategy.conversionFocus) || "—"}</AnalysisField>
+        <AnalysisField label="核心卖点">{formatDisplayJoin(commercialStrategy.coreSellingPoints)}</AnalysisField>
+        <AnalysisField label="情绪卖点">{formatDisplayJoin(commercialStrategy.emotionalSellingPoints)}</AnalysisField>
+        <AnalysisField label="礼赠属性">{formatDisplayJoin(commercialStrategy.giftingAttributes)}</AnalysisField>
+        <AnalysisField label="转化焦点">{formatDisplayValue(commercialStrategy.conversionFocus)}</AnalysisField>
       </AnalysisSection>
 
       <AnalysisSection title="事实安全">
-        <AnalysisField label="客观事实">{toList(factSafety.objectiveFacts).join("、") || "—"}</AnalysisField>
-        <AnalysisField label="缺失事实">{toList(factSafety.missingFacts).join("、") || "—"}</AnalysisField>
+        <AnalysisField label="客观事实">{objectiveFactsDisplay}</AnalysisField>
+        <AnalysisField label="缺失事实">{missingFactsDisplay}</AnalysisField>
       </AnalysisSection>
 
-      {toText(factSafety.factSafetyNote) && (
+      {hasDisplayValue(factSafety.factSafetyNote) && (
         <div className="mt-4 rounded-[20px] border border-black/8 bg-[#fafafa] p-4">
           <h3 className="text-xs font-medium text-black/45">事实参数规则</h3>
-          <p className="mt-2 text-sm leading-6 text-black/75">{toText(factSafety.factSafetyNote)}</p>
+          <p className="mt-2 text-sm leading-6 text-black/75">{factSafetyNoteDisplay}</p>
         </div>
       )}
 
@@ -1533,7 +1880,12 @@ function DirectorPlanPreview({
           <h3 className="mb-3 text-sm font-semibold">图组规划</h3>
           <div className="grid gap-4">
             {imagePlanList.map((item, index) => (
-              <DirectorImagePlanCard key={`director-plan-${index}`} item={item} index={index} />
+              <DirectorImagePlanCard
+                key={`director-plan-${index}`}
+                item={item}
+                index={index}
+                targetLanguage={targetLanguage}
+              />
             ))}
           </div>
         </div>
@@ -1547,18 +1899,37 @@ function AnalysisPreview({
   directorPlan,
   meta,
   warning,
+  platform,
+  targetLanguage,
 }: {
   analysis: ProductAnalysis | null;
   directorPlan: DirectorPlan | null;
   meta: AnalysisMeta | null;
   warning?: string | null;
+  platform: string;
+  targetLanguage: string;
 }) {
   if (directorPlan) {
-    return <DirectorPlanPreview plan={directorPlan} meta={meta} warning={warning} />;
+    return (
+      <DirectorPlanPreview
+        plan={directorPlan}
+        meta={meta}
+        warning={warning}
+        platform={platform}
+        targetLanguage={targetLanguage}
+      />
+    );
   }
 
   if (analysis) {
-    return <LegacyAnalysisPreview analysis={analysis} meta={meta} warning={warning} />;
+    return (
+      <LegacyAnalysisPreview
+        analysis={analysis}
+        meta={meta}
+        warning={warning}
+        targetLanguage={targetLanguage}
+      />
+    );
   }
 
   return null;
