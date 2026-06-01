@@ -1,16 +1,34 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
-type GeneratedImageItem = { imageUrl?: string } | string;
 type SelectOption = { label: string; value: string };
+type CustomerView = Record<string, unknown>;
+type ProductPlan = Record<string, unknown>;
+type FrontendResultImage = Record<string, unknown>;
+type FrontendResult = {
+  summary?: unknown;
+  images?: FrontendResultImage[];
+};
 
-const IMAGE_PROVIDER = "xai";
-const IMAGE_MODEL = "grok-imagine-image-quality";
 const MODEL_LABEL = "Grok pro";
 const modelOptions = [MODEL_LABEL];
+const DISPLAY_EMPTY = "—";
+const API_BASE = process.env.NEXT_PUBLIC_OVIRAQ_API_BASE || "http://45.32.250.250:3002";
 
-const platformOptions = ["智能匹配", "淘宝", "小红书", "抖音", "拼多多", "亚马逊", "TikTok", "Temu"];
+const platformOptions = [
+  "智能匹配",
+  "淘宝",
+  "天猫",
+  "拼多多",
+  "抖音",
+  "小红书",
+  "京东",
+  "亚马逊",
+  "Temu",
+  "TikTok",
+  "SHEIN",
+];
 const languageOptions: SelectOption[] = [
   { label: "无文字(纯视觉)", value: "no_text" },
   { label: "中文(简体)", value: "zh" },
@@ -36,7 +54,6 @@ const ratioOptions = [
   "16:9 宽屏",
 ];
 const qualityOptions = ["标准", "高清", "超清"];
-const API_BASE = "http://45.32.250.250:3001";
 
 function getQuantityOptions(imageType: string): string[] {
   const max = imageType === "detail" ? 15 : 6;
@@ -71,985 +88,86 @@ function parseCount(quantityLabel: string, imageType = "main"): number {
   return Math.min(max, Math.max(1, count));
 }
 
-const DISPLAY_EMPTY = "—";
-const INVALID_OBJECT_TEXT = "[object Object]";
-
-const OBJECT_DISPLAY_KEYS = [
-  "label",
-  "name",
-  "title",
-  "text",
-  "value",
-  "content",
-  "description",
-  "fact",
-  "type",
-  "source",
-  "amount",
-  "unit",
-  "roleLabel",
-  "roleName",
-  "role",
-  "goal",
-  "sceneDescription",
-  "sceneType",
-  "sceneIntent",
-] as const;
-
-const LAYOUT_FIELD_LABELS: Record<string, string> = {
-  base_image_for_layout: "底图生成",
-  pure_generate: "纯图生成",
-  poster_text_overlay_later: "后期海报排版",
-  annotation_overlay_later: "后期标注排版",
-  selling_point_overlay_later: "后期卖点排版",
-  detail_text_overlay_later: "后期细节说明排版",
-  scene_caption_overlay_later: "后期场景文案排版",
-  parameter_template_later: "后期参数模板排版",
-  parameter_table_overlay_later: "后期参数表排版",
-  notice_template_later: "后期注意事项排版",
-  emotional_poster_overlay_later: "后期情绪海报排版",
-  brand_story_overlay_later: "后期品牌文案排版",
-  summary_overlay_later: "后期总结排版",
-  closing_poster_overlay_later: "后期收尾海报排版",
-  none: "无需排版",
-};
-
-const GENERIC_PRODUCT_NAMES = new Set(["", "电商商品", "商品", "产品", "未识别"]);
-
-function sanitizeDisplayText(text: string): string {
-  const trimmed = text.trim();
-  if (!trimmed || trimmed === DISPLAY_EMPTY || trimmed.includes(INVALID_OBJECT_TEXT)) return "";
-  return trimmed;
-}
-
-function hasDisplayValue(value: unknown): boolean {
-  return sanitizeDisplayText(formatDisplayValueCore(value)).length > 0;
-}
-
-function formatPairDisplay(left: unknown, right: unknown): string {
-  const leftText = sanitizeDisplayText(formatDisplayValueCore(left));
-  const rightText = sanitizeDisplayText(formatDisplayValueCore(right));
-  if (leftText && rightText) return `${leftText}：${rightText}`;
-  return leftText || rightText;
-}
-
-function formatDisplayValueCore(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  if (typeof value === "string") return sanitizeDisplayText(value);
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-
-  if (Array.isArray(value)) {
-    return value
-      .map((item) => formatDisplayValueCore(item))
-      .filter(Boolean)
-      .join("、");
-  }
-
-  if (typeof value === "object") {
-    const record = value as Record<string, unknown>;
-
-    const amountText =
-      record.amount !== null && record.amount !== undefined
-        ? sanitizeDisplayText(formatDisplayValueCore(record.amount))
-        : "";
-    const unitText =
-      record.unit !== null && record.unit !== undefined
-        ? sanitizeDisplayText(formatDisplayValueCore(record.unit))
-        : "";
-    if (amountText || unitText) {
-      const combined = `${amountText}${unitText}`;
-      const prefix = sanitizeDisplayText(
-        formatDisplayValueCore(record.type) ||
-          formatDisplayValueCore(record.label) ||
-          formatDisplayValueCore(record.name)
-      );
-      return prefix ? `${prefix}：${combined}` : combined;
-    }
-
-    if ("label" in record && "value" in record) {
-      const pair = formatPairDisplay(record.label, record.value);
-      if (pair) return pair;
-    }
-
-    if ("name" in record && "value" in record) {
-      const pair = formatPairDisplay(record.name, record.value);
-      if (pair) return pair;
-    }
-
-    const typeText = sanitizeDisplayText(formatDisplayValueCore(record.type));
-    for (const detailKey of ["value", "text", "content", "name", "source", "description", "fact"]) {
-      if (!(detailKey in record)) continue;
-      const detailText = sanitizeDisplayText(formatDisplayValueCore(record[detailKey]));
-      if (detailText) return typeText ? `${typeText}：${detailText}` : detailText;
-    }
-
-    for (const key of OBJECT_DISPLAY_KEYS) {
-      if (!(key in record)) continue;
-      const fieldText = sanitizeDisplayText(formatDisplayValueCore(record[key]));
-      if (fieldText) return fieldText;
-    }
-
-    const nested = Object.values(record)
-      .map((item) => formatDisplayValueCore(item))
-      .filter(Boolean);
-
-    if (nested.length > 0) return nested.join("、");
-    return "";
-  }
-
-  return sanitizeDisplayText(String(value));
-}
-
-function formatDisplayValue(value: unknown): string {
-  const text = sanitizeDisplayText(formatDisplayValueCore(value));
-  return text || DISPLAY_EMPTY;
-}
-
-function renderDisplayText(value: unknown): string {
-  return formatDisplayValue(value);
-}
-
-function splitGuidanceItems(text: string): string[] {
-  if (!text) return [];
-  return text
-    .split(/[、,，;；\n]+/)
-    .map((item) => sanitizeDisplayText(item))
-    .filter(Boolean);
-}
-
-function formatDisplayList(value: unknown): string[] {
-  if (value === null || value === undefined) return [];
-
-  if (Array.isArray(value)) {
-    return value
-      .flatMap((item) => {
-        if (typeof item === "string") return splitGuidanceItems(item);
-        const text = sanitizeDisplayText(formatDisplayValueCore(item));
-        return text ? splitGuidanceItems(text) : [];
-      })
-      .filter(Boolean);
-  }
-
-  if (typeof value === "string") return splitGuidanceItems(value);
-
-  const text = sanitizeDisplayText(formatDisplayValueCore(value));
-  return text ? splitGuidanceItems(text) : [];
-}
-
-function formatDisplayJoin(value: unknown): string {
-  const items = formatDisplayList(value);
-  return items.length > 0 ? items.join("、") : DISPLAY_EMPTY;
-}
-
-function toText(value: unknown): string {
-  return formatDisplayValueCore(value);
-}
-
-function toList(value: unknown): string[] {
-  return formatDisplayList(value);
-}
-
-function safeDisplay(value: unknown): string {
-  return formatDisplayValue(value);
-}
-
-function formatLayoutField(value: unknown): string {
-  const raw = sanitizeDisplayText(formatDisplayValueCore(value));
-  if (!raw) return "";
-  return LAYOUT_FIELD_LABELS[raw] ?? raw;
-}
-
-function formatRenderLayoutDisplay(renderMode: unknown, layoutType: unknown): string {
-  const labels = [formatLayoutField(renderMode), formatLayoutField(layoutType)].filter(Boolean);
-  return [...new Set(labels)].join(" · ");
-}
-
-function formatProductNameDisplay(productName: unknown, productForm: unknown): string {
-  const name = sanitizeDisplayText(formatDisplayValueCore(productName));
-  const form = sanitizeDisplayText(formatDisplayValueCore(productForm));
-  if (name && !GENERIC_PRODUCT_NAMES.has(name)) return name;
-  if (form) return form;
-  return "未识别到明确产品名称";
-}
-
-function formatPlatformStrategyDisplay(value: unknown, platform: string): string {
-  const text = sanitizeDisplayText(formatDisplayValueCore(value));
-  if (text) return text;
-
-  if (platform === "淘宝") {
-    return "适合淘宝商品图组：首图突出点击吸引力，详情图依次补充结构、卖点、材质、场景和参数信息。";
-  }
-
-  return "根据当前平台和商品类型，优先突出主体清晰度、点击吸引力、核心卖点和详情页转化效率。";
-}
-
-function formatBackgroundGuidance(value: unknown, maxItems = 3): string {
-  const items = formatDisplayList(value);
-
-  const seen = new Set<string>();
-  const unique: string[] = [];
-  for (const item of items) {
-    if (seen.has(item)) continue;
-    seen.add(item);
-    unique.push(item);
-  }
-
-  const limited = unique.slice(0, maxItems).join("、");
-  return limited || DISPLAY_EMPTY;
-}
-
-function formatFactsDisplay(...sources: unknown[]): string {
-  const items = sources.flatMap((source) => formatDisplayList(source));
-  const seen = new Set<string>();
-  const unique: string[] = [];
-  for (const item of items) {
-    if (seen.has(item)) continue;
-    seen.add(item);
-    unique.push(item);
-  }
-  return unique.length > 0 ? unique.join("、") : DISPLAY_EMPTY;
-}
-
-const INTERNAL_FACT_TOKENS = new Set([
-  "image_label",
-  "medium",
-  "user_text",
-  "packaging_text",
-  "source",
-  "type",
-  "label",
-  "visible_text",
-  "ocr",
-  "image",
-  "unknown",
-]);
-
-const KNOWN_FACT_LABELS = new Set(["容量", "重量", "尺寸", "材质", "规格", "颜色", "净含量", "成分"]);
-
-type AggregatedFactsPlanInput = {
-  directorPlan?: DirectorPlan | null;
-  productAnalysis?: ProductAnalysis | null;
-};
-
-type ParsedFactItem = {
-  label?: string;
-  value: string;
-};
-
-type FactToken =
-  | { kind: "pair"; label: string; value: string }
-  | { kind: "label"; text: string }
-  | { kind: "value"; text: string };
-
-function isInternalFactToken(text: string): boolean {
-  return INTERNAL_FACT_TOKENS.has(text.trim().toLowerCase());
-}
-
-function normalizeFactText(text: string): string {
-  return sanitizeDisplayText(text);
-}
-
-function normalizeVolumeValue(text: string): string {
-  const trimmed = text.trim();
-  const match = trimmed.match(/^(\d+(?:\.\d+)?)\s*(ml|l|毫升|升)$/i);
-  if (!match) return trimmed;
-  const unit = match[2].toLowerCase();
-  if (unit === "毫升") return `${match[1]}ML`;
-  if (unit === "升") return `${match[1]}L`;
-  return `${match[1]}${match[2].toUpperCase()}`;
-}
-
-function normalizeFactValue(text: string): string {
-  const trimmed = normalizeFactText(text);
-  if (looksLikeVolumeValue(trimmed)) return normalizeVolumeValue(trimmed);
-  return trimmed;
-}
-
-function looksLikeVolumeValue(text: string): boolean {
-  return /^\d+(\.\d+)?\s*(ml|l|毫升|升)$/i.test(text.trim());
-}
-
-function looksLikeMeasurementValue(text: string): boolean {
-  return /^\d+(\.\d+)?\s*(g|kg|克|千克|cm|mm|m|寸)$/i.test(text.trim());
-}
-
-function isFactLabelCandidate(text: string): boolean {
-  const normalized = normalizeFactText(text);
-  if (!normalized || isInternalFactToken(normalized)) return false;
-  if (KNOWN_FACT_LABELS.has(normalized)) return true;
-  if (/\d/.test(normalized)) return false;
-  return normalized.length <= 6;
-}
-
-function formatFactPair(label: string, value: string): string {
-  return `${normalizeFactText(label)}：${normalizeFactValue(value)}`;
-}
-
-function isCompatibleFactPair(label: string, value: string): boolean {
-  if (label === "容量") return looksLikeVolumeValue(value);
-  if (label === "重量") return /^\d+(\.\d+)?\s*(g|kg|克|千克)$/i.test(value.trim());
-  if (label === "尺寸") return /^\d+(\.\d+)?\s*(cm|mm|m|寸)$/i.test(value.trim());
-  if (label === "材质") return !looksLikeVolumeValue(value) && !looksLikeMeasurementValue(value);
-  return true;
-}
-
-function parseFactItem(value: unknown): ParsedFactItem | null {
-  if (value === null || value === undefined) return null;
-
-  if (typeof value === "string") {
-    const text = sanitizeDisplayText(value);
-    if (!text || text === DISPLAY_EMPTY || text.includes(INVALID_OBJECT_TEXT) || isInternalFactToken(text)) {
-      return null;
-    }
-    if (/[:：]/.test(text)) {
-      const separatorIndex = text.search(/[:：]/);
-      const label = text.slice(0, separatorIndex).trim();
-      const factValue = text.slice(separatorIndex + 1).trim();
-      if (label && factValue && !isInternalFactToken(label) && !isInternalFactToken(factValue)) {
-        return { label, value: factValue };
-      }
-    }
-    return { value: text };
-  }
-
-  if (typeof value === "number" || typeof value === "boolean") {
-    return { value: String(value) };
-  }
-
-  if (Array.isArray(value)) return null;
-
-  if (typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    const typeText = sanitizeDisplayText(formatDisplayValueCore(record.type));
-    const labelText = sanitizeDisplayText(formatDisplayValueCore(record.label));
-    const nameText = sanitizeDisplayText(formatDisplayValueCore(record.name));
-    const prefix =
-      (typeText && !isInternalFactToken(typeText) ? typeText : "") ||
-      (labelText && !isInternalFactToken(labelText) ? labelText : "") ||
-      (nameText && !isInternalFactToken(nameText) ? nameText : "");
-
-    for (const detailKey of ["value", "text", "content", "source", "amount"]) {
-      if (!(detailKey in record)) continue;
-      let detailText = sanitizeDisplayText(formatDisplayValueCore(record[detailKey]));
-      if (detailKey === "amount" && record.unit !== null && record.unit !== undefined) {
-        detailText = `${detailText}${sanitizeDisplayText(formatDisplayValueCore(record.unit))}`;
-      }
-      if (!detailText || detailText.includes(INVALID_OBJECT_TEXT) || isInternalFactToken(detailText)) continue;
-      if (prefix) return { label: prefix, value: detailText };
-      return { value: detailText };
-    }
-
-    const nested = sanitizeDisplayText(formatDisplayValueCore(record));
-    if (nested && !nested.includes(INVALID_OBJECT_TEXT) && !isInternalFactToken(nested)) {
-      return { value: nested };
-    }
-  }
-
-  return null;
-}
-
-function collectRawFactItems(value: unknown): ParsedFactItem[] {
-  if (value === null || value === undefined) return [];
-  if (Array.isArray(value)) return value.flatMap((item) => collectRawFactItems(item));
-
-  const parsed = parseFactItem(value);
-  if (!parsed) return [];
-  if (parsed.label && parsed.value) return [parsed];
-  if (parsed.value) return [{ value: parsed.value }];
-  return [];
-}
-
-function tokenizeFactItems(items: ParsedFactItem[]): FactToken[] {
-  const tokens: FactToken[] = [];
-
-  for (const item of items) {
-    if (item.label && item.value) {
-      const label = normalizeFactText(item.label);
-      const value = normalizeFactValue(item.value);
-      if (label && value && !isInternalFactToken(label) && !isInternalFactToken(value)) {
-        tokens.push({ kind: "pair", label, value });
-      }
-      continue;
-    }
-
-    const text = normalizeFactText(item.value);
-    if (!text || text === DISPLAY_EMPTY || text.includes(INVALID_OBJECT_TEXT) || isInternalFactToken(text)) {
-      continue;
-    }
-
-    if (looksLikeVolumeValue(text) || looksLikeMeasurementValue(text) || /^\d/.test(text)) {
-      tokens.push({ kind: "value", text: normalizeFactValue(text) });
-      continue;
-    }
-
-    if (isFactLabelCandidate(text)) {
-      tokens.push({ kind: "label", text });
-      continue;
-    }
-
-    tokens.push({ kind: "value", text });
-  }
-
-  return tokens;
-}
-
-function dedupeFactResults(results: string[]): string[] {
-  const pairs = results.filter((item) => item.includes("："));
-  const subsumedLabels = new Set<string>();
-  const subsumedValues = new Set<string>();
-
-  for (const pair of pairs) {
-    const separatorIndex = pair.indexOf("：");
-    const label = pair.slice(0, separatorIndex).trim();
-    const value = pair.slice(separatorIndex + 1).trim();
-    if (!label || !value) continue;
-    subsumedLabels.add(label.toLowerCase());
-    subsumedValues.add(value.toLowerCase());
-    subsumedValues.add(normalizeFactValue(value).toLowerCase());
-  }
-
-  const seen = new Set<string>();
-  const final: string[] = [];
-
-  for (const item of results) {
-    const normalizedItem = normalizeFactText(item);
-    if (!normalizedItem || normalizedItem.includes(INVALID_OBJECT_TEXT) || isInternalFactToken(normalizedItem)) {
-      continue;
-    }
-
-    if (!item.includes("：")) {
-      const lower = normalizedItem.toLowerCase();
-      const normalizedValue = normalizeFactValue(normalizedItem).toLowerCase();
-      if (subsumedLabels.has(lower) || subsumedValues.has(lower) || subsumedValues.has(normalizedValue)) {
-        continue;
-      }
-    }
-
-    const dedupeKey = item.includes("：")
-      ? (() => {
-          const separatorIndex = item.indexOf("：");
-          return formatFactPair(item.slice(0, separatorIndex), item.slice(separatorIndex + 1)).toLowerCase();
-        })()
-      : normalizeFactValue(normalizedItem).toLowerCase();
-
-    if (seen.has(dedupeKey)) continue;
-    seen.add(dedupeKey);
-    final.push(
-      item.includes("：")
-        ? (() => {
-            const separatorIndex = item.indexOf("：");
-            return formatFactPair(item.slice(0, separatorIndex), item.slice(separatorIndex + 1));
-          })()
-        : normalizedItem
-    );
-  }
-
-  return final;
-}
-
-function mergeFactTokens(tokens: FactToken[]): string[] {
-  const results: string[] = [];
-  const looseLabels: string[] = [];
-  const looseValues: string[] = [];
-
-  for (const token of tokens) {
-    if (token.kind === "pair") {
-      results.push(formatFactPair(token.label, token.value));
-      continue;
-    }
-    if (token.kind === "label") {
-      looseLabels.push(token.text);
-      continue;
-    }
-    looseValues.push(token.text);
-  }
-
-  const usedLabelIndexes = new Set<number>();
-  const usedValueIndexes = new Set<number>();
-
-  for (let labelIndex = 0; labelIndex < looseLabels.length; labelIndex++) {
-    const label = looseLabels[labelIndex];
-    for (let valueIndex = 0; valueIndex < looseValues.length; valueIndex++) {
-      if (usedValueIndexes.has(valueIndex)) continue;
-      const value = looseValues[valueIndex];
-      if (!isCompatibleFactPair(label, value)) continue;
-      results.push(formatFactPair(label, value));
-      usedLabelIndexes.add(labelIndex);
-      usedValueIndexes.add(valueIndex);
-      break;
-    }
-  }
-
-  for (let valueIndex = 0; valueIndex < looseValues.length; valueIndex++) {
-    if (usedValueIndexes.has(valueIndex)) continue;
-    const value = looseValues[valueIndex];
-    if (looksLikeVolumeValue(value)) {
-      results.push(formatFactPair("容量", value));
-      usedValueIndexes.add(valueIndex);
-    }
-  }
-
-  const remainingLabels = looseLabels.filter((_, index) => !usedLabelIndexes.has(index));
-  const remainingValues = looseValues.filter((_, index) => !usedValueIndexes.has(index));
-  for (let index = 0; index < Math.min(remainingLabels.length, remainingValues.length); index++) {
-    results.push(formatFactPair(remainingLabels[index], remainingValues[index]));
-  }
-
-  return dedupeFactResults(results);
-}
-
-function mergeFactItems(items: ParsedFactItem[]): string[] {
-  return mergeFactTokens(tokenizeFactItems(items));
-}
-
-function collectImagePlanVerifiedFacts(plan: unknown): unknown[] {
-  if (!plan || typeof plan !== "object" || Array.isArray(plan)) return [];
-  const imagePlan = (plan as Record<string, unknown>).imagePlan;
-  if (!Array.isArray(imagePlan)) return [];
-  return imagePlan.map((item) => pickSection(item, "copywriting").verifiedFacts);
-}
-
-function getAggregatedObjectiveFacts(input: AggregatedFactsPlanInput): string {
-  const sources: unknown[] = [];
-
-  const pushFactSafetyFacts = (parent: unknown) => {
-    const factSafety = pickSection(parent, "factSafety");
-    sources.push(factSafety.objectiveFacts, factSafety.verifiedFacts, factSafety.visibleFacts);
-  };
-
-  if (input.productAnalysis) {
-    pushFactSafetyFacts(input.productAnalysis);
-    sources.push(input.productAnalysis.objectiveFacts);
-    sources.push(...collectImagePlanVerifiedFacts(input.productAnalysis));
-  }
-
-  if (input.directorPlan) {
-    pushFactSafetyFacts(input.directorPlan);
-    sources.push(...collectImagePlanVerifiedFacts(input.directorPlan));
-  }
-
-  const parsedItems = sources.flatMap((source) => collectRawFactItems(source));
-  const merged = mergeFactItems(parsedItems);
-  return merged.length > 0 ? merged.join("、") : DISPLAY_EMPTY;
-}
-
-function hasUseScenarioValue(value: unknown): boolean {
-  if (value === null || value === undefined) return false;
-  if (Array.isArray(value)) return value.some((item) => hasUseScenarioValue(item));
-  if (typeof value === "string") return sanitizeDisplayText(value).length > 0;
-  if (typeof value === "object") {
-    const text = sanitizeDisplayText(formatDisplayValueCore(value));
-    return text.length > 0;
-  }
-  return sanitizeDisplayText(formatDisplayValueCore(value)).length > 0;
-}
-
-function formatUseScenarioValue(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  if (Array.isArray(value)) {
-    const items = formatDisplayList(value);
-    return items.length > 0 ? items.join("、") : "";
-  }
-  if (typeof value === "string") {
-    return sanitizeDisplayText(value);
-  }
-  const items = formatDisplayList(value);
-  if (items.length > 0) return items.join("、");
-  return sanitizeDisplayText(formatDisplayValueCore(value));
-}
-
-function collectUseScenarioCandidates(parent: unknown): unknown[] {
-  if (!parent || typeof parent !== "object" || Array.isArray(parent)) return [];
-  const record = parent as Record<string, unknown>;
-  const productIdentity = pickSection(parent, "productIdentity");
-  const scenarioDirection = pickSection(parent, "scenarioDirection");
-  return [
-    productIdentity.useScenarios,
-    productIdentity.useScenario,
-    productIdentity.usageScenario,
-    scenarioDirection.useScenarios,
-    record.useScenarios,
-    record.useScenario,
-  ];
-}
-
-function getProductUseScenarios(
-  plan: DirectorPlan | null | undefined,
-  productAnalysis: ProductAnalysis | null | undefined
-): string {
-  const candidates = [
-    ...collectUseScenarioCandidates(plan),
-    ...collectUseScenarioCandidates(productAnalysis),
-  ];
-
-  for (const candidate of candidates) {
-    if (!hasUseScenarioValue(candidate)) continue;
-    const formatted = formatUseScenarioValue(candidate);
-    if (formatted) return formatted;
-  }
-
-  return DISPLAY_EMPTY;
-}
-
-const COPYWRITING_INTERNAL_TEXT_PATTERNS = [
-  "template_overlay_later",
-  "no_text",
-  "visual_only",
-  "only use customer-provided facts",
-  "clearly visible product/package/label text",
-  "hide or leave the module empty",
-  "image_label",
-  "medium",
-  "factrule",
-  "verifiedfacts",
-];
-
-const COPYWRITING_CUSTOMER_FIELDS = [
-  "headline",
-  "subheadline",
-  "body",
-  "cta",
-  "notes",
-  "title",
-  "caption",
-  "description",
-] as const;
-
-function isInternalCopywritingText(text: string): boolean {
-  const normalized = text.trim().toLowerCase();
-  if (!normalized) return true;
-  return COPYWRITING_INTERNAL_TEXT_PATTERNS.some((pattern) => normalized.includes(pattern));
-}
-
-function sanitizeCustomerCopywritingText(value: unknown): string {
-  const text = sanitizeDisplayText(formatDisplayValueCore(value));
-  if (!text || isInternalCopywritingText(text)) return "";
-  return text;
-}
-
-function resolveCopywritingTargetLanguage(
-  copywriting: Record<string, unknown>,
-  selectedTargetLanguage: string
-): string {
-  const fromCopywriting = sanitizeDisplayText(formatDisplayValueCore(copywriting.targetLanguage));
-  if (fromCopywriting && !isInternalCopywritingText(fromCopywriting)) return fromCopywriting;
-  return selectedTargetLanguage;
-}
-
-function formatCopywritingTargetLanguageText(targetLanguage: string): string {
-  const normalized = targetLanguage.trim().toLowerCase();
-  if (!normalized || normalized === "no_text" || normalized === "visual_only" || normalized === "无文字") {
-    return "无文字，仅保留商品本身已有标签或包装文字";
-  }
-  if (normalized === "zh" || normalized === "zh-cn") {
-    return "中文文案，后期模板叠加";
-  }
-  if (normalized === "zh-hant") {
-    return "繁体中文文案，后期模板叠加";
-  }
-  if (normalized === "en") {
-    return "英文文案，后期模板叠加";
-  }
-  if (normalized === "ja") {
-    return "日文文案，后期模板叠加";
-  }
-  const languageOption = languageOptions.find((option) => option.value.toLowerCase() === normalized);
-  if (languageOption) {
-    return `按所选语言（${languageOption.label}）后期模板叠加`;
-  }
-  return "按所选语言后期模板叠加";
-}
-
-function formatImagePlanCopywritingLines(copywritingValue: unknown, selectedTargetLanguage: string): string[] {
-  const copywriting =
-    copywritingValue && typeof copywritingValue === "object" && !Array.isArray(copywritingValue)
-      ? (copywritingValue as Record<string, unknown>)
-      : null;
-  if (!copywriting || Object.keys(copywriting).length === 0) return [];
-
-  const lines: string[] = [];
-  const mode = sanitizeDisplayText(formatDisplayValueCore(copywriting.mode));
-  const customerLines = COPYWRITING_CUSTOMER_FIELDS.flatMap((field) => {
-    if (!(field in copywriting)) return [];
-    const text = sanitizeCustomerCopywritingText(copywriting[field]);
-    return text ? [text] : [];
-  });
-
-  if (mode === "template_overlay_later") {
-    lines.push("文案规划：后期模板排版");
-  }
-
-  if (mode === "template_overlay_later" || "targetLanguage" in copywriting || customerLines.length > 0) {
-    const targetLanguage = resolveCopywritingTargetLanguage(copywriting, selectedTargetLanguage);
-    lines.push(`目标文字：${formatCopywritingTargetLanguageText(targetLanguage)}`);
-  }
-
-  lines.push(...customerLines);
-  return lines;
-}
-
-function ImagePlanCopywritingBlock({
-  copywriting,
-  targetLanguage,
-  className = "",
-}: {
-  copywriting: unknown;
-  targetLanguage: string;
-  className?: string;
-}) {
-  const lines = formatImagePlanCopywritingLines(copywriting, targetLanguage);
-  if (lines.length === 0) return null;
-
-  return (
-    <div className={className}>
-      {lines.map((line, lineIndex) => (
-        <p key={`${line}-${lineIndex}`} className={lineIndex > 0 ? "mt-1" : undefined}>
-          {line}
-        </p>
-      ))}
-    </div>
-  );
-}
-
-function visibleTextToList(value: unknown): string[] {
-  return toList(value);
-}
-
-function pickSection(plan: unknown, key: string): Record<string, unknown> {
-  if (!plan || typeof plan !== "object" || Array.isArray(plan)) return {};
-  const section = (plan as Record<string, unknown>)[key];
-  if (!section || typeof section !== "object" || Array.isArray(section)) return {};
-  return section as Record<string, unknown>;
-}
-
-function pickNestedSection(plan: unknown, ...keys: string[]): Record<string, unknown> {
-  let current: unknown = plan;
-  for (const key of keys) {
-    current = pickSection(current, key);
-  }
-  return (current ?? {}) as Record<string, unknown>;
-}
-
-function formatObjectStates(value: unknown): string {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return sanitizeDisplayText(formatDisplayValueCore(value));
-  }
-
-  return Object.entries(value as Record<string, unknown>)
-    .map(([key, item]) => {
-      const text = sanitizeDisplayText(formatDisplayValueCore(item));
-      return text ? `${key}: ${text}` : "";
-    })
-    .filter(Boolean)
-    .join("；");
-}
-
-type DirectorPlan = Record<string, unknown>;
-
-type AnalysisImagePlanItem = {
-  role?: unknown;
-  goal?: unknown;
-  mustKeep?: unknown;
-  mustAvoid?: unknown;
-};
-
-type ProductAnalysis = {
-  version?: unknown;
-  source?: unknown;
-  category?: unknown;
-  productForm?: unknown;
-  styleDNA?: unknown;
-  visibleStructure?: unknown;
-  visibleMaterials?: unknown;
-  visibleText?: unknown;
-  recommendedScenes?: unknown;
-  forbiddenScenes?: unknown;
-  objectiveFacts?: unknown;
-  factSafetyNote?: unknown;
-  imagePlan?: unknown;
-  request?: unknown;
-  confidence?: unknown;
-};
-
-type AnalysisMeta = {
-  analyzerVersion?: string;
-  mode?: string;
-  fileCount?: number;
-  model?: string;
-  note?: string;
-  directorVersion?: string;
-  directorSchema?: string;
-  legacyCompatible?: boolean;
-};
-
 function normalizeSelectOptions(options: string[] | SelectOption[]): SelectOption[] {
   return options.map((option) =>
     typeof option === "string" ? { label: option, value: option } : option
   );
 }
 
-const IMAGE_USAGE_DESCRIPTIONS: Record<string, string> = {
-  主图: "适合作为商品首图，突出主体、质感与点击率。",
-  场景图: "适合展示商品使用环境，强化生活方式和购买想象。",
-  使用场景: "适合展示目标人群在真实场景中的使用感。",
-  卖点图: "适合承接核心卖点、功能利益点和视觉记忆点。",
-  细节图: "适合展示材质、纹理、工艺、图案和局部细节。",
-  氛围图: "适合用于详情页过渡、社媒种草或店铺装修。",
-};
-
-const IMAGE_USAGE_TEMPLATES: Record<number, string[]> = {
-  1: ["主图"],
-  2: ["主图", "场景图"],
-  3: ["主图", "场景图", "细节图"],
-  4: ["主图", "场景图", "卖点图", "细节图"],
-  5: ["主图", "场景图", "使用场景", "卖点图", "细节图"],
-  6: ["主图", "场景图", "使用场景", "卖点图", "细节图", "氛围图"],
-};
-
-type ImageUsagePlanItem = {
-  indexLabel: string;
-  usage: string;
-  description: string;
-};
-
-function getFallbackUsageLabel(index: number): string {
-  if (index === 0) return "主图";
-  if (index === 1) return "场景图";
-  if (index === 2) return "细节图";
-  return "图片";
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
 }
 
-function extractDirectorPlanFromUnknown(source: unknown): DirectorPlan | null {
-  if (!source || typeof source !== "object") return null;
-  const obj = source as Record<string, unknown>;
-
-  if (Array.isArray(obj.imagePlan) || obj.productIdentity || obj.styleDirection) {
-    return obj as DirectorPlan;
-  }
-
-  const nestedKeys = ["directorPlan", "analysisPlan", "ProductAnalysisPlan"];
-  for (const key of nestedKeys) {
-    const nested = obj[key];
-    if (!nested || typeof nested !== "object" || Array.isArray(nested)) continue;
-
-    const nestedObj = nested as Record<string, unknown>;
-    if (Array.isArray(nestedObj.imagePlan) || nestedObj.productIdentity || nestedObj.styleDirection) {
-      return nestedObj as DirectorPlan;
-    }
-
-    const deeper = nestedObj.directorPlan;
-    if (deeper && typeof deeper === "object" && !Array.isArray(deeper)) {
-      return deeper as DirectorPlan;
-    }
-  }
-
-  return null;
+function readString(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return "";
 }
 
-function resolveActiveDirectorPlan(
-  directorPlan: DirectorPlan | null,
-  productAnalysis: ProductAnalysis | null
-): DirectorPlan | null {
+function readSummaryItems(summary: unknown): string[] {
+  if (summary === null || summary === undefined) return [];
+  if (typeof summary === "string") return summary.trim() ? [summary.trim()] : [];
+  if (Array.isArray(summary)) {
+    return summary.flatMap((item) => readSummaryItems(item));
+  }
+  const record = asRecord(summary);
+  if (!record) return [];
+  return Object.values(record).flatMap((item) => readSummaryItems(item));
+}
+
+function renderCustomerContent(value: unknown): ReactNode {
+  if (value === null || value === undefined) return DISPLAY_EMPTY;
+  if (typeof value === "string") return value.trim() || DISPLAY_EMPTY;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) return DISPLAY_EMPTY;
+    return (
+      <div className="space-y-3">
+        {value.map((item, index) => (
+          <div key={`item-${index}`} className="rounded-[16px] border border-black/6 bg-[#fafafa] p-3">
+            {renderCustomerContent(item)}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  const record = asRecord(value);
+  if (!record) return DISPLAY_EMPTY;
+
+  const title = readString(record.title ?? record.label ?? record.name ?? record.roleLabel);
+  const body = record.content ?? record.text ?? record.description ?? record.value;
+
+  if (title && body !== undefined && body !== null && typeof body !== "object") {
+    return (
+      <div>
+        <p className="font-medium text-black/85">{title}</p>
+        <p className="mt-1 text-sm leading-6 text-black/70">{renderCustomerContent(body)}</p>
+      </div>
+    );
+  }
+
+  const entries = Object.entries(record).filter(([, item]) => item !== null && item !== undefined && item !== "");
+  if (entries.length === 0) return DISPLAY_EMPTY;
+
   return (
-    extractDirectorPlanFromUnknown(directorPlan) ||
-    extractDirectorPlanFromUnknown(productAnalysis) ||
-    null
+    <div className="space-y-2">
+      {entries.map(([key, item]) => (
+        <div key={key}>
+          <span className="text-black/45">{key}：</span>
+          <span className="text-black/80">{renderCustomerContent(item)}</span>
+        </div>
+      ))}
+    </div>
   );
 }
 
-function pickImagePlanItem(plan: DirectorPlan | null, index: number): Record<string, unknown> | null {
-  if (!plan) return null;
-  const imagePlan = plan.imagePlan;
-  if (!Array.isArray(imagePlan)) return null;
-  const item = imagePlan[index];
-  if (!item || typeof item !== "object" || Array.isArray(item)) return null;
-  return item as Record<string, unknown>;
-}
-
-type ResultCardDisplay = {
-  indexLabel: string;
-  title: string;
-  badge: string;
-  description: string;
-};
-
-function getResultCardDisplay(
-  index: number,
-  activeDirectorPlan: DirectorPlan | null
-): ResultCardDisplay {
-  const indexLabel = `#${String(index + 1).padStart(2, "0")}`;
-  const fallbackUsage = getFallbackUsageLabel(index);
-  const fallbackPlan = getImageUsagePlan(index + 1)[index];
-
-  const imagePlanItem = pickImagePlanItem(activeDirectorPlan, index);
-  if (!imagePlanItem) {
-    return {
-      indexLabel,
-      title: fallbackPlan?.usage || fallbackUsage,
-      badge: fallbackPlan?.usage || fallbackUsage,
-      description: fallbackPlan?.description || IMAGE_USAGE_DESCRIPTIONS[fallbackUsage] || "",
-    };
-  }
-
-  const title =
-    toText(imagePlanItem.roleLabel) ||
-    toText(imagePlanItem.title) ||
-    toText(imagePlanItem.roleName) ||
-    toText(imagePlanItem.role) ||
-    fallbackPlan?.usage ||
-    fallbackUsage;
-
-  const roleText = toText(imagePlanItem.role);
-  const roleLabelText = toText(imagePlanItem.roleLabel);
-  const badge = roleText || (roleLabelText !== title ? roleLabelText : "") || title;
-
-  const productFocus = pickSection(imagePlanItem, "productFocus");
-  const description =
-    toText(imagePlanItem.goal) ||
-    toText(imagePlanItem.sceneIntent) ||
-    toText(productFocus) ||
-    toList(productFocus.focusPoints).join("、") ||
-    toText(imagePlanItem.focusPoints) ||
-    fallbackPlan?.description ||
-    IMAGE_USAGE_DESCRIPTIONS[fallbackUsage] ||
-    "";
-
-  return {
-    indexLabel,
-    title,
-    badge,
-    description,
-  };
-}
-
-function getImageUsagePlan(total: number): ImageUsagePlanItem[] {
-  const count = Math.max(1, Math.min(total, 12));
-  const template = IMAGE_USAGE_TEMPLATES[Math.min(count, 6)] ?? IMAGE_USAGE_TEMPLATES[6];
-  const usages: string[] = [];
-
-  for (let i = 0; i < count; i += 1) {
-    usages.push(i < template.length ? template[i] : "氛围图");
-  }
-
-  return usages.map((usage, index) => ({
-    indexLabel: `#${String(index + 1).padStart(2, "0")}`,
-    usage,
-    description: IMAGE_USAGE_DESCRIPTIONS[usage] ?? "",
-  }));
-}
-
-function extractImageUrls(data: {
-  images?: GeneratedImageItem[];
-  imageUrl?: string;
-}): string[] {
-  if (data.images && Array.isArray(data.images)) {
-    const urls = data.images
-      .map((item) => (typeof item === "string" ? item : item.imageUrl))
-      .filter((url): url is string => Boolean(url));
-    if (urls.length > 0) return urls;
-  }
-  if (data.imageUrl) return [data.imageUrl];
-  return [];
+function unwrapApiPayload(data: Record<string, unknown>): Record<string, unknown> {
+  const nested = asRecord(data.data);
+  return nested ?? data;
 }
 
 export default function Home() {
@@ -1065,13 +183,13 @@ export default function Home() {
   const [quality, setQuality] = useState("标准");
   const [quantity, setQuantity] = useState("1 张");
   const [productInfo, setProductInfo] = useState("");
-  const [generatedImages, setGeneratedImages] = useState<string[]>([]);
   const [productImages, setProductImages] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
-  const [productAnalysis, setProductAnalysis] = useState<ProductAnalysis | null>(null);
-  const [directorPlan, setDirectorPlan] = useState<DirectorPlan | null>(null);
-  const [analysisMeta, setAnalysisMeta] = useState<AnalysisMeta | null>(null);
+  const [customerView, setCustomerView] = useState<CustomerView | null>(null);
+  const [productPlan, setProductPlan] = useState<ProductPlan | null>(null);
+  const [frontendResult, setFrontendResult] = useState<FrontendResult | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [generationError, setGenerationError] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [previewImageIndex, setPreviewImageIndex] = useState<number | null>(null);
@@ -1086,10 +204,11 @@ export default function Home() {
     .join("|");
 
   function clearAnalysisState() {
-    setProductAnalysis(null);
-    setDirectorPlan(null);
-    setAnalysisMeta(null);
+    setCustomerView(null);
+    setProductPlan(null);
+    setFrontendResult(null);
     setAnalysisError(null);
+    setGenerationError(null);
   }
 
   useEffect(() => {
@@ -1151,8 +270,8 @@ export default function Home() {
     setStage("idle");
   }
 
-  function handleBackToAnalysisPlan() {
-    if (productAnalysis || directorPlan) {
+  function handleBackToAnalysis() {
+    if (customerView) {
       setStage("analysis");
     }
   }
@@ -1162,11 +281,7 @@ export default function Home() {
     generateAbortRef.current?.abort();
     generateAbortRef.current = null;
     setIsGenerating(false);
-    if (productAnalysis || directorPlan) {
-      setStage("analysis");
-    } else {
-      setStage("idle");
-    }
+    setStage(customerView ? "analysis" : "idle");
   }
 
   function handleNewProject() {
@@ -1187,7 +302,6 @@ export default function Home() {
     setQuality("标准");
     setQuantity("3 张");
     setProductInfo("");
-    setGeneratedImages([]);
     setProductImages([]);
     clearAnalysisState();
     setIsAnalyzing(false);
@@ -1199,19 +313,18 @@ export default function Home() {
 
   function buildAnalyzeFormData() {
     const aspectRatio = parseAspectRatio(selectedRatio);
-    const imageCount = parseCount(quantity, imageType);
     const formData = new FormData();
 
     productImages.forEach((file) => {
       formData.append("images", file);
     });
-    formData.append("image", productImages[0]);
-    formData.append("productInfo", productInfo);
+    formData.append("requirements", productInfo);
+    formData.append("count", String(parseCount(quantity, imageType)));
     formData.append("imageType", imageType);
     formData.append("platform", platform);
     formData.append("targetLanguage", language);
     formData.append("aspectRatio", aspectRatio);
-    formData.append("imageCount", String(imageCount));
+    formData.append("quality", mapQuality(quality));
 
     return formData;
   }
@@ -1225,6 +338,7 @@ export default function Home() {
     setIsAnalyzing(true);
     setAnalyzingStep(1);
     setAnalysisError(null);
+    setGenerationError(null);
     setStage("analyzing");
 
     try {
@@ -1233,27 +347,26 @@ export default function Home() {
         body: buildAnalyzeFormData(),
       });
 
-      const data = await res.json();
-      const legacyAnalysis = data.analysis || data.legacyAnalysis || null;
-      const nextDirectorPlan = data.directorPlan || data.analysisPlan || null;
+      const data = (await res.json()) as Record<string, unknown>;
+      const payload = unwrapApiPayload(data);
+      const nextCustomerView = asRecord(payload.customerView);
+      const nextProductPlan = asRecord(payload.plan);
 
-      if (!res.ok || !data.success || !legacyAnalysis) {
+      if (!res.ok || data.success === false || !nextCustomerView || !nextProductPlan) {
         const message =
-          typeof data.error === "string"
-            ? data.error
-            : typeof data.message === "string"
-              ? data.message
-              : "产品分析失败，请稍后重试";
+          readString(data.error) ||
+          readString(data.message) ||
+          readString(payload.error) ||
+          "产品分析失败，请稍后重试";
         setAnalysisError(message);
         setStage("idle");
         return;
       }
 
-      setProductAnalysis(legacyAnalysis);
-      setDirectorPlan(nextDirectorPlan);
-      setAnalysisMeta(data.meta ?? null);
-      if (data.aiError) {
-        setAnalysisError(String(data.aiError));
+      setCustomerView(nextCustomerView);
+      setProductPlan(nextProductPlan);
+      if (readString(data.aiError)) {
+        setAnalysisError(readString(data.aiError));
       }
       setStage("analysis");
     } catch (error) {
@@ -1271,12 +384,13 @@ export default function Home() {
       return;
     }
 
-    if (!productAnalysis && !directorPlan) {
+    if (!productPlan) {
       alert("请先完成产品分析");
       return;
     }
 
     setIsGenerating(true);
+    setGenerationError(null);
     setStage("generating");
 
     const requestId = generationRequestIdRef.current + 1;
@@ -1284,54 +398,12 @@ export default function Home() {
     const abortController = new AbortController();
     generateAbortRef.current = abortController;
 
-    const count = parseCount(quantity, imageType);
-    const aspectRatio = parseAspectRatio(selectedRatio);
-    const qualityValue = mapQuality(quality);
-    const confirmedAnalysisPlan = directorPlan || productAnalysis;
-    const confirmedIdentity = pickSection(confirmedAnalysisPlan, "productIdentity");
-    const confirmedFactSafety = pickSection(confirmedAnalysisPlan, "factSafety");
-    const legacyAnalysis = productAnalysis as ProductAnalysis | null;
-
-    const formData = new FormData();
-    productImages.forEach((file) => {
-      formData.append("images", file);
-    });
-    formData.append("image", productImages[0]);
-    formData.append("imageType", imageType);
-    formData.append("platform", platform);
-    formData.append("productInfo", productInfo);
-    formData.append("targetLanguage", language);
-    formData.append("provider", IMAGE_PROVIDER);
-    formData.append("model", IMAGE_MODEL);
-    formData.append("aspectRatio", aspectRatio);
-    formData.append("quality", qualityValue);
-    formData.append("count", String(count));
-    formData.append("analysisPlanJson", JSON.stringify(confirmedAnalysisPlan || {}));
-    formData.append("analysisMetaJson", JSON.stringify(analysisMeta || {}));
-    formData.append(
-      "analysisCategory",
-      toText(confirmedIdentity.category) || toText(legacyAnalysis?.category) || ""
-    );
-    formData.append(
-      "analysisProductForm",
-      toText(confirmedIdentity.productForm) || toText(legacyAnalysis?.productForm) || ""
-    );
-    formData.append(
-      "analysisFactSafetyNote",
-      toText(confirmedFactSafety.factSafetyNote) || toText(legacyAnalysis?.factSafetyNote) || ""
-    );
-
-    console.log("[Oviraq Frontend Submit]");
-    console.log("imageType:", imageType);
-    console.log("platform:", platform);
-    console.log("targetLanguage:", language);
-    console.log("model:", IMAGE_MODEL);
-    console.log("aspectRatio:", aspectRatio);
-    console.log("quality:", qualityValue);
-    console.log("count:", count);
+    const formData = buildAnalyzeFormData();
+    formData.append("productPlanJson", JSON.stringify(productPlan));
+    formData.append("realRun", "false");
 
     try {
-      const res = await fetch(`${API_BASE}/auto-generate-product`, {
+      const res = await fetch(`${API_BASE}/generate`, {
         method: "POST",
         body: formData,
         signal: abortController.signal,
@@ -1339,23 +411,32 @@ export default function Home() {
 
       if (generationRequestIdRef.current !== requestId) return;
 
-      const data = await res.json();
-      const urls = extractImageUrls(data);
+      const data = (await res.json()) as Record<string, unknown>;
+      const payload = unwrapApiPayload(data);
+      const nextFrontendResult = asRecord(payload.frontendResult) as FrontendResult | null;
 
       if (generationRequestIdRef.current !== requestId) return;
 
-      if (urls.length > 0) {
-        setGeneratedImages(urls);
-        setStage("results");
-      } else {
-        console.error(data.error ?? data);
-        alert(typeof data.error === "string" ? data.error : "生成失败");
+      if (!res.ok || data.success === false || !nextFrontendResult) {
+        const message =
+          readString(data.error) ||
+          readString(data.message) ||
+          readString(payload.error) ||
+          "生成失败，请稍后重试";
+        setGenerationError(message);
+        alert(message);
         setStage("analysis");
+        return;
       }
+
+      setFrontendResult(nextFrontendResult);
+      setStage("results");
     } catch (error) {
       if (abortController.signal.aborted || generationRequestIdRef.current !== requestId) return;
       console.error(error);
-      alert("请求失败，请稍后重试");
+      const message = "请求失败，请稍后重试";
+      setGenerationError(message);
+      alert(message);
       setStage("analysis");
     } finally {
       if (generationRequestIdRef.current === requestId) {
@@ -1365,15 +446,11 @@ export default function Home() {
     }
   }
 
-  function handlePrimaryAction() {
-    void handleAnalyzeProduct();
-  }
-
   const primaryButtonLabel = isGenerating
     ? "正在生成..."
     : isAnalyzing
       ? "正在分析..."
-      : productAnalysis || directorPlan
+      : customerView
         ? "重新分析产品"
         : "分析产品";
 
@@ -1399,6 +476,8 @@ export default function Home() {
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
   }, []);
+
+  const resultImages = Array.isArray(frontendResult?.images) ? frontendResult.images : [];
 
   return (
     <main className="h-screen overflow-hidden bg-[#f7f7f8] p-5 text-black">
@@ -1604,7 +683,7 @@ export default function Home() {
                 </button>
                 <button
                   type="button"
-                  onClick={handleBackToAnalysisPlan}
+                  onClick={handleBackToAnalysis}
                   className="h-12 w-full rounded-full border border-black/10 bg-[#fafafa] text-sm transition-colors hover:bg-white"
                 >
                   返回视觉方案
@@ -1631,7 +710,7 @@ export default function Home() {
             ) : (
               <button
                 type="button"
-                onClick={handlePrimaryAction}
+                onClick={() => void handleAnalyzeProduct()}
                 disabled={isAnalyzing || isGenerating}
                 className="h-12 w-full rounded-full bg-black text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:bg-black/40 disabled:hover:opacity-100"
               >
@@ -1647,28 +726,22 @@ export default function Home() {
             <AnalysisError message={analysisError} onRetry={() => void handleAnalyzeProduct()} />
           )}
           {stage === "analyzing" && <Analyzing step={analyzingStep} />}
-          {stage === "analysis" && (productAnalysis || directorPlan) && (
-            <AnalysisPreview
-              analysis={productAnalysis}
-              directorPlan={directorPlan}
-              meta={analysisMeta}
-              warning={analysisError}
-              platform={platform}
-              targetLanguage={language}
-            />
+          {stage === "analysis" && customerView && (
+            <CustomerViewPreview customerView={customerView} warning={analysisError} />
           )}
           {stage === "generating" && <Generating onCancel={handleCancelGenerate} />}
-          {stage === "results" && (
+          {stage === "results" && frontendResult && (
             <Results
-              images={generatedImages}
-              generatedImages={generatedImages}
-              modelName={MODEL_LABEL}
+              frontendResult={frontendResult}
               aspectRatio={parseAspectRatio(selectedRatio)}
-              directorPlan={directorPlan}
-              productAnalysis={productAnalysis}
               onRegenerate={() => void generateImages()}
               onPreview={setPreview}
             />
+          )}
+          {generationError && stage === "analysis" && (
+            <div className="mt-4 rounded-[16px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+              {generationError}
+            </div>
           )}
         </section>
       </div>
@@ -1720,13 +793,13 @@ export default function Home() {
         </div>
       )}
 
-      {preview !== null && generatedImages.length > 0 && (
+      {preview !== null && resultImages.length > 0 && readString(resultImages[preview]?.imageUrl) && (
         <div onClick={() => setPreview(null)} className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md">
           <button className="absolute right-6 top-6 rounded-full bg-white/15 px-4 py-2 text-white">×</button>
           <button
             onClick={(e) => {
               e.stopPropagation();
-              setPreview((preview + generatedImages.length - 1) % generatedImages.length);
+              setPreview((preview + resultImages.length - 1) % resultImages.length);
             }}
             className="absolute left-6 rounded-full bg-white/15 px-4 py-3 text-white"
           >
@@ -1734,14 +807,14 @@ export default function Home() {
           </button>
           <img
             onClick={(e) => e.stopPropagation()}
-            src={generatedImages[preview]}
+            src={readString(resultImages[preview]?.imageUrl)}
             className="max-h-[85vh] max-w-[90vw] rounded-[28px] object-contain"
             alt=""
           />
           <button
             onClick={(e) => {
               e.stopPropagation();
-              setPreview((preview + 1) % generatedImages.length);
+              setPreview((preview + 1) % resultImages.length);
             }}
             className="absolute right-6 rounded-full bg-white/15 px-4 py-3 text-white"
           >
@@ -1869,7 +942,7 @@ function AnalysisField({
   children,
 }: {
   label: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <div className="rounded-[20px] border border-black/8 bg-white p-4">
@@ -1884,7 +957,7 @@ function AnalysisSection({
   children,
 }: {
   title: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <div className="mt-6">
@@ -1894,301 +967,19 @@ function AnalysisSection({
   );
 }
 
-function TagList({ items }: { items: string[] }) {
-  const safeItems = items
-    .map((item) => sanitizeDisplayText(item))
-    .filter(Boolean);
-  if (safeItems.length === 0) return <>{DISPLAY_EMPTY}</>;
-  return (
-    <div className="flex flex-wrap gap-2">
-      {safeItems.map((tag) => (
-        <span key={tag} className="rounded-full border border-black/10 px-2.5 py-1 text-xs text-black/70">
-          {tag}
-        </span>
-      ))}
-    </div>
-  );
-}
-
-function AnalysisMetaBadges({ meta }: { meta: AnalysisMeta | null }) {
-  if (!meta) return null;
-
-  const badges = [
-    meta.directorVersion ? `导演版本 ${meta.directorVersion}` : null,
-    meta.directorSchema ? `方案结构 ${meta.directorSchema}` : null,
-    meta.analyzerVersion ? `分析版本 ${meta.analyzerVersion}` : null,
-    meta.mode ? `模式 ${meta.mode}` : null,
-    typeof meta.fileCount === "number" ? `参考图 ${meta.fileCount} 张` : null,
-    meta.legacyCompatible ? "兼容旧版分析" : null,
-  ].filter(Boolean) as string[];
-
-  if (badges.length === 0) return null;
-
-  return (
-    <div className="mt-4 flex flex-wrap gap-2">
-      {badges.map((item) => (
-        <span key={item} className="rounded-full bg-[#f4f4f5] px-3 py-1.5 text-xs text-black/70">
-          {item}
-        </span>
-      ))}
-    </div>
-  );
-}
-
-function LegacyAnalysisPreview({
-  analysis,
-  meta,
+function CustomerViewPreview({
+  customerView,
   warning,
-  targetLanguage,
 }: {
-  analysis: ProductAnalysis;
-  meta: AnalysisMeta | null;
+  customerView: CustomerView;
   warning?: string | null;
-  targetLanguage: string;
 }) {
-  const styleDNAList = formatDisplayList(analysis.styleDNA);
-  const visibleTextList = formatDisplayList(analysis.visibleText);
-  const imagePlanList = Array.isArray(analysis.imagePlan)
-    ? (analysis.imagePlan as AnalysisImagePlanItem[])
-    : [];
-  const factSafetyNote = renderDisplayText(analysis.factSafetyNote);
-  const objectiveFactsDisplay = getAggregatedObjectiveFacts({ productAnalysis: analysis });
-
-  return (
-    <div className="mx-auto max-w-4xl">
-      <div className="mb-6">
-        <p className="text-sm text-black/35">Oviraq AI · 产品分析</p>
-        <h2 className="mt-2 text-3xl font-semibold">AI 产品分析结果</h2>
-        <p className="mt-3 text-black/45">请确认分析结果后，点击左侧「确认生成图片」继续出图</p>
-        <AnalysisMetaBadges meta={meta} />
-        {warning && (
-          <div className="mt-4 rounded-[16px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-            {warning}
-          </div>
-        )}
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <AnalysisField label="识别类目">{formatDisplayValue(analysis.category)}</AnalysisField>
-        <AnalysisField label="产品形态">{formatDisplayValue(analysis.productForm)}</AnalysisField>
-        <AnalysisField label="风格方向">
-          <TagList items={styleDNAList} />
-        </AnalysisField>
-        <AnalysisField label="可见文字">
-          {visibleTextList.length > 0 ? (
-            <ul className="space-y-1">
-              {visibleTextList.map((text) => (
-                <li key={text}>{text}</li>
-              ))}
-            </ul>
-          ) : (
-            "未识别到清晰可读文字"
-          )}
-        </AnalysisField>
-        <AnalysisField label="可见结构">{formatDisplayJoin(analysis.visibleStructure)}</AnalysisField>
-        <AnalysisField label="可见材质">{formatDisplayJoin(analysis.visibleMaterials)}</AnalysisField>
-        <AnalysisField label="推荐场景">{formatDisplayJoin(analysis.recommendedScenes)}</AnalysisField>
-        <AnalysisField label="禁止场景">{formatDisplayJoin(analysis.forbiddenScenes)}</AnalysisField>
-        <AnalysisField label="客观事实">{objectiveFactsDisplay}</AnalysisField>
-      </div>
-
-      {hasDisplayValue(analysis.factSafetyNote) && (
-        <div className="mt-4 rounded-[20px] border border-black/8 bg-[#fafafa] p-4">
-          <h3 className="text-xs font-medium text-black/45">事实参数规则</h3>
-          <p className="mt-2 text-sm leading-6 text-black/75">{factSafetyNote}</p>
-        </div>
-      )}
-
-      {imagePlanList.length > 0 && (
-        <div className="mt-6">
-          <h3 className="mb-3 text-sm font-semibold">图组规划</h3>
-          <div className="grid gap-4">
-            {imagePlanList.map((item, index) => {
-              const role = renderDisplayText(item.role);
-              const goal = renderDisplayText(item.goal);
-              const mustKeep = renderDisplayText(item.mustKeep);
-              const mustAvoid = renderDisplayText(item.mustAvoid);
-
-              return (
-                <div
-                  key={`${role || "plan"}-${index}`}
-                  className="rounded-[20px] border border-black/8 bg-white p-4"
-                >
-                  <div className="mb-3 flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-semibold">#{String(index + 1).padStart(2, "0")}</span>
-                    {hasDisplayValue(item.role) && (
-                      <span className="rounded-full bg-black px-2.5 py-1 text-[11px] text-white">{role}</span>
-                    )}
-                  </div>
-                  {hasDisplayValue(item.goal) && (
-                    <p className="text-sm leading-6 text-black/75">
-                      <span className="text-black/45">目标：</span>
-                      {goal}
-                    </p>
-                  )}
-                  <ImagePlanCopywritingBlock
-                    copywriting={(item as Record<string, unknown>).copywriting}
-                    targetLanguage={targetLanguage}
-                    className="mt-2 text-sm leading-6 text-black/75"
-                  />
-                  {hasDisplayValue(item.mustKeep) && (
-                    <p className="mt-2 text-sm leading-6 text-black/75">
-                      <span className="text-black/45">必须保留：</span>
-                      {mustKeep}
-                    </p>
-                  )}
-                  {hasDisplayValue(item.mustAvoid) && (
-                    <p className="mt-2 text-sm leading-6 text-black/75">
-                      <span className="text-black/45">必须避免：</span>
-                      {mustAvoid}
-                    </p>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function DirectorImagePlanCard({
-  item,
-  index,
-  targetLanguage,
-}: {
-  item: Record<string, unknown>;
-  index: number;
-  targetLanguage: string;
-}) {
-  const sceneIntent = pickSection(item, "sceneIntent");
-  const composition = pickSection(item, "composition");
-  const productFocus = pickSection(item, "productFocus");
-  const planIndex = formatDisplayValueCore(item.index) || String(index + 1).padStart(2, "0");
-  const roleLabel = renderDisplayText(item.roleLabel);
-  const role = renderDisplayText(item.role);
-  const goal = renderDisplayText(item.goal);
-  const renderLayoutDisplay = formatRenderLayoutDisplay(item.renderMode, item.layoutType);
-  const stateControl = formatObjectStates(item.stateControl);
-  const mustKeep = renderDisplayText(productFocus.mustKeep);
-  const mustAvoid = renderDisplayText(productFocus.mustAvoid);
-  const focusPoints = formatDisplayList(productFocus.focusPoints);
-  const sceneIntentDisplay = [sceneIntent.sceneType, sceneIntent.sceneDescription]
-    .map((value) => renderDisplayText(value))
-    .filter((value) => value !== DISPLAY_EMPTY);
-  const compositionDisplay = [composition.cameraAngle, composition.framing, composition.productCoverage]
-    .map((value) => renderDisplayText(value))
-    .filter((value) => value !== DISPLAY_EMPTY);
-
-  return (
-    <div className="rounded-[20px] border border-black/8 bg-white p-4">
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <span className="text-sm font-semibold">#{planIndex.padStart(2, "0")}</span>
-        {hasDisplayValue(item.roleLabel) && (
-          <span className="rounded-full bg-black px-2.5 py-1 text-[11px] text-white">{roleLabel}</span>
-        )}
-        {hasDisplayValue(item.role) && role !== roleLabel && (
-          <span className="rounded-full border border-black/10 px-2.5 py-1 text-[11px] text-black/70">
-            {role}
-          </span>
-        )}
-      </div>
-
-      <div className="space-y-2 text-sm leading-6 text-black/75">
-        {hasDisplayValue(item.goal) && (
-          <p>
-            <span className="text-black/45">目标：</span>
-            {goal}
-          </p>
-        )}
-        {renderLayoutDisplay && (
-          <p>
-            <span className="text-black/45">渲染 / 布局：</span>
-            {renderLayoutDisplay}
-          </p>
-        )}
-        {sceneIntentDisplay.length > 0 && (
-          <p>
-            <span className="text-black/45">场景意图：</span>
-            {sceneIntentDisplay.join(" · ")}
-          </p>
-        )}
-        {compositionDisplay.length > 0 && (
-          <p>
-            <span className="text-black/45">构图：</span>
-            {compositionDisplay.join(" · ")}
-          </p>
-        )}
-        {stateControl && (
-          <p>
-            <span className="text-black/45">状态控制：</span>
-            {stateControl}
-          </p>
-        )}
-        <ImagePlanCopywritingBlock copywriting={item.copywriting} targetLanguage={targetLanguage} />
-        {hasDisplayValue(productFocus.mustKeep) && (
-          <p>
-            <span className="text-black/45">必须保留：</span>
-            {mustKeep}
-          </p>
-        )}
-        {hasDisplayValue(productFocus.mustAvoid) && (
-          <p>
-            <span className="text-black/45">必须避免：</span>
-            {mustAvoid}
-          </p>
-        )}
-        {focusPoints.length > 0 && (
-          <p>
-            <span className="text-black/45">聚焦要点：</span>
-            {focusPoints.join("、")}
-          </p>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function DirectorPlanPreview({
-  plan,
-  productAnalysis,
-  meta,
-  warning,
-  platform,
-  targetLanguage,
-}: {
-  plan: DirectorPlan;
-  productAnalysis: ProductAnalysis | null;
-  meta: AnalysisMeta | null;
-  warning?: string | null;
-  platform: string;
-  targetLanguage: string;
-}) {
-  const productIdentity = pickSection(plan, "productIdentity");
-  const styleDirection = pickSection(plan, "styleDirection");
-  const productLock = pickSection(plan, "productLock");
-  const scenarioDirection = pickSection(plan, "scenarioDirection");
-  const commercialStrategy = pickSection(plan, "commercialStrategy");
-  const factSafety = pickSection(plan, "factSafety");
-  const imagePlanList = Array.isArray(plan.imagePlan)
-    ? (plan.imagePlan as Record<string, unknown>[])
-    : [];
-  const productNameDisplay = formatProductNameDisplay(productIdentity.productName, productIdentity.productForm);
-  const productUseScenariosDisplay = getProductUseScenarios(plan, productAnalysis);
-  const platformStrategyDisplay = formatPlatformStrategyDisplay(styleDirection.platformStrategy, platform);
-  const backgroundGuidanceDisplay = formatBackgroundGuidance(scenarioDirection.backgroundGuidance);
-  const objectiveFactsDisplay = getAggregatedObjectiveFacts({ directorPlan: plan, productAnalysis });
-  const missingFactsDisplay = formatFactsDisplay(factSafety.missingFacts);
-  const factSafetyNoteDisplay = renderDisplayText(factSafety.factSafetyNote);
-
   return (
     <div className="mx-auto max-w-4xl">
       <div className="mb-6">
         <p className="text-sm text-black/35">Oviraq AI · 视觉导演</p>
         <h2 className="mt-2 text-3xl font-semibold">AI 电商视觉导演方案</h2>
         <p className="mt-3 text-black/45">请确认导演方案后，点击左侧「确认生成图片」继续出图</p>
-        <AnalysisMetaBadges meta={meta} />
         {warning && (
           <div className="mt-4 rounded-[16px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
             {warning}
@@ -2196,124 +987,31 @@ function DirectorPlanPreview({
         )}
       </div>
 
-      <AnalysisSection title="产品识别">
-        <AnalysisField label="产品名称">{productNameDisplay}</AnalysisField>
-        <AnalysisField label="识别类目">{formatDisplayValue(productIdentity.category)}</AnalysisField>
-        <AnalysisField label="子类目">{formatDisplayValue(productIdentity.subCategory)}</AnalysisField>
-        <AnalysisField label="产品形态">{formatDisplayValue(productIdentity.productForm)}</AnalysisField>
-        <AnalysisField label="使用场景">{productUseScenariosDisplay}</AnalysisField>
+      <AnalysisSection title="产品摘要">
+        <div className="md:col-span-2">
+          <AnalysisField label="产品摘要">{renderCustomerContent(customerView.productSummary)}</AnalysisField>
+        </div>
       </AnalysisSection>
 
-      <AnalysisSection title="风格方向">
-        <AnalysisField label="风格 DNA">
-          <TagList items={formatDisplayList(styleDirection.styleDNA)} />
-        </AnalysisField>
-        <AnalysisField label="视觉关键词">
-          <TagList items={formatDisplayList(styleDirection.visualKeywords)} />
-        </AnalysisField>
-        <AnalysisField label="调性关键词">
-          <TagList items={formatDisplayList(styleDirection.toneKeywords)} />
-        </AnalysisField>
-        <AnalysisField label="平台策略">{platformStrategyDisplay}</AnalysisField>
+      <AnalysisSection title="视觉方向">
+        <div className="md:col-span-2">
+          <AnalysisField label="视觉方向">{renderCustomerContent(customerView.visualDirection)}</AnalysisField>
+        </div>
       </AnalysisSection>
 
-      <AnalysisSection title="结构锁定">
-        <AnalysisField label="可见结构">{formatDisplayJoin(productLock.visibleStructure)}</AnalysisField>
-        <AnalysisField label="可见材质">{formatDisplayJoin(productLock.visibleMaterials)}</AnalysisField>
-        <AnalysisField label="可见颜色">{formatDisplayJoin(productLock.visibleColors)}</AnalysisField>
-        <AnalysisField label="可见图案">{formatDisplayJoin(productLock.visiblePatterns)}</AnalysisField>
-        <AnalysisField label="组件关系">{formatDisplayValue(productLock.componentRelationship)}</AnalysisField>
-        <AnalysisField label="功能机制">{formatDisplayValue(productLock.functionalMechanism)}</AnalysisField>
-        <AnalysisField label="结构风险">{formatDisplayJoin(productLock.structureRisks)}</AnalysisField>
-        <AnalysisField label="禁止改动">{formatDisplayJoin(productLock.forbiddenChanges)}</AnalysisField>
-      </AnalysisSection>
-
-      <AnalysisSection title="场景策略">
-        <AnalysisField label="推荐场景">{formatDisplayJoin(scenarioDirection.recommendedScenes)}</AnalysisField>
-        <AnalysisField label="禁止场景">{formatDisplayJoin(scenarioDirection.forbiddenScenes)}</AnalysisField>
-        <AnalysisField label="推荐道具">{formatDisplayJoin(scenarioDirection.propRecommendations)}</AnalysisField>
-        <AnalysisField label="避免道具">{formatDisplayJoin(scenarioDirection.propAvoidance)}</AnalysisField>
-        <AnalysisField label="背景指导">{backgroundGuidanceDisplay}</AnalysisField>
-      </AnalysisSection>
-
-      <AnalysisSection title="商业卖点">
-        <AnalysisField label="核心卖点">{formatDisplayJoin(commercialStrategy.coreSellingPoints)}</AnalysisField>
-        <AnalysisField label="情绪卖点">{formatDisplayJoin(commercialStrategy.emotionalSellingPoints)}</AnalysisField>
-        <AnalysisField label="礼赠属性">{formatDisplayJoin(commercialStrategy.giftingAttributes)}</AnalysisField>
-        <AnalysisField label="转化焦点">{formatDisplayValue(commercialStrategy.conversionFocus)}</AnalysisField>
+      <AnalysisSection title="图组规划">
+        <div className="md:col-span-2">
+          <AnalysisField label="图组规划">{renderCustomerContent(customerView.imagePlan)}</AnalysisField>
+        </div>
       </AnalysisSection>
 
       <AnalysisSection title="事实安全">
-        <AnalysisField label="客观事实">{objectiveFactsDisplay}</AnalysisField>
-        <AnalysisField label="缺失事实">{missingFactsDisplay}</AnalysisField>
+        <div className="md:col-span-2">
+          <AnalysisField label="事实安全">{renderCustomerContent(customerView.factSafety)}</AnalysisField>
+        </div>
       </AnalysisSection>
-
-      {hasDisplayValue(factSafety.factSafetyNote) && (
-        <div className="mt-4 rounded-[20px] border border-black/8 bg-[#fafafa] p-4">
-          <h3 className="text-xs font-medium text-black/45">事实参数规则</h3>
-          <p className="mt-2 text-sm leading-6 text-black/75">{factSafetyNoteDisplay}</p>
-        </div>
-      )}
-
-      {imagePlanList.length > 0 && (
-        <div className="mt-6">
-          <h3 className="mb-3 text-sm font-semibold">图组规划</h3>
-          <div className="grid gap-4">
-            {imagePlanList.map((item, index) => (
-              <DirectorImagePlanCard
-                key={`director-plan-${index}`}
-                item={item}
-                index={index}
-                targetLanguage={targetLanguage}
-              />
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
-}
-
-function AnalysisPreview({
-  analysis,
-  directorPlan,
-  meta,
-  warning,
-  platform,
-  targetLanguage,
-}: {
-  analysis: ProductAnalysis | null;
-  directorPlan: DirectorPlan | null;
-  meta: AnalysisMeta | null;
-  warning?: string | null;
-  platform: string;
-  targetLanguage: string;
-}) {
-  if (directorPlan) {
-    return (
-      <DirectorPlanPreview
-        plan={directorPlan}
-        productAnalysis={analysis}
-        meta={meta}
-        warning={warning}
-        platform={platform}
-        targetLanguage={targetLanguage}
-      />
-    );
-  }
-
-  if (analysis) {
-    return (
-      <LegacyAnalysisPreview
-        analysis={analysis}
-        meta={meta}
-        warning={warning}
-        targetLanguage={targetLanguage}
-      />
-    );
-  }
-
-  return null;
 }
 
 function Analyzing({ step }: { step: number }) {
@@ -2366,7 +1064,10 @@ function Analyzing({ step }: { step: number }) {
             if (step === stepNum && stepNum === 5) {
               return (
                 <div key={text}>
-                  <p>• {text}{dotSuffixes[dotIndex]}</p>
+                  <p>
+                    • {text}
+                    {dotSuffixes[dotIndex]}
+                  </p>
                   <p className="mt-2 text-sm text-black/35">{subTexts[subIndex]}</p>
                 </div>
               );
@@ -2381,37 +1082,6 @@ function Analyzing({ step }: { step: number }) {
             );
           })}
         </div>
-      </div>
-    </div>
-  );
-}
-
-function Schemes({ onGenerate }: { onGenerate: () => void }) {
-  const schemes = ["极简高级主图", "氛围感生活场景", "高转化卖点视觉"];
-  return (
-    <div>
-      <p className="text-sm text-black/35">Oviraq AI · 视觉方案</p>
-      <h2 className="mt-2 text-3xl font-semibold">AI 推荐视觉方案</h2>
-      <p className="mt-3 text-black/45">根据商品特征、平台策略与商业摄影逻辑生成</p>
-
-      <div className="mt-8 grid grid-cols-2 gap-5">
-        {schemes.map((title, index) => (
-          <div key={title} className="rounded-[28px] border border-black/10 bg-white p-4 transition hover:-translate-y-1 hover:shadow-lg">
-            <div className="mb-5 h-[260px] rounded-[24px] bg-gradient-to-br from-[#f5f5f5] to-[#dededc] p-8">
-              <div className="flex h-full items-center justify-center rounded-[20px] bg-white/50">
-                <div className="h-24 w-36 rounded-3xl bg-black/80" />
-              </div>
-            </div>
-            <h3 className="text-xl font-semibold">{title}</h3>
-            <p className="mt-3 text-sm leading-6 text-black/55">AI 根据商品属性推荐该商业摄影方向，适合提升点击率和视觉质感。</p>
-            <div className="mt-4 flex flex-wrap gap-2">
-              {["极简", "留白", "柔光", "高级感"].map((tag) => (
-                <span key={tag} className="rounded-full border border-black/10 px-3 py-1 text-xs text-black/55">{tag}</span>
-              ))}
-            </div>
-            <button onClick={onGenerate} className="mt-5 h-11 w-full rounded-full bg-black text-sm font-medium text-white">生成该方案</button>
-          </div>
-        ))}
       </div>
     </div>
   );
@@ -2439,58 +1109,40 @@ function Generating({ onCancel }: { onCancel: () => void }) {
   );
 }
 
-function resolveResultImages({
-  images,
-  generatedImages,
-  imageUrls,
-  imageUrl,
-}: {
-  images?: string[];
-  generatedImages?: string[];
-  imageUrls?: string[];
-  imageUrl?: string;
-}): string[] {
-  if (images && images.length > 0) return images;
-  if (generatedImages && generatedImages.length > 0) return generatedImages;
-  if (imageUrls && imageUrls.length > 0) return imageUrls;
-  if (imageUrl) return [imageUrl];
-  return [];
-}
-
 function ResultImageCard({
-  url,
+  image,
   index,
-  display,
   aspectClass,
-  isPrimary,
   onPreview,
 }: {
-  url: string;
+  image: FrontendResultImage;
   index: number;
-  display: ResultCardDisplay;
   aspectClass: string;
-  isPrimary?: boolean;
   onPreview: (index: number) => void;
 }) {
+  const imageUrl = readString(image.imageUrl);
+  const status = readString(image.status).toLowerCase();
+  const isPreviewPlaceholder = !imageUrl && status === "preview";
+  const title =
+    readString(image.title) ||
+    readString(image.roleLabel) ||
+    readString(image.role) ||
+    readString(image.name) ||
+    `图片 ${index + 1}`;
+  const description =
+    readString(image.description) || readString(image.goal) || readString(image.summary) || "";
+  const indexLabel = `#${String(index + 1).padStart(2, "0")}`;
+
   return (
     <article className="w-full overflow-hidden rounded-[20px] border border-black/8 bg-white shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg">
       <div className="border-b border-black/6 px-3 py-2">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs font-semibold tracking-wide text-black">
-            {display.indexLabel} {display.title}
+            {indexLabel} {title}
           </span>
-          {display.badge && display.badge !== display.title && (
-            <span
-              className={`rounded-full px-2 py-0.5 text-[10px] font-medium text-white ${
-                isPrimary ? "bg-black ring-1 ring-black/15" : "bg-black/85"
-              }`}
-            >
-              {display.badge}
-            </span>
-          )}
         </div>
-        {display.description && (
-          <p className="mt-1 line-clamp-2 text-xs leading-snug text-black/50">{display.description}</p>
+        {description && (
+          <p className="mt-1 line-clamp-2 text-xs leading-snug text-black/50">{description}</p>
         )}
       </div>
 
@@ -2498,45 +1150,55 @@ function ResultImageCard({
         <div
           className={`group relative w-full max-h-[420px] overflow-hidden rounded-2xl bg-neutral-50 ${aspectClass}`}
         >
-          <button
-            type="button"
-            onClick={() => onPreview(index)}
-            className="block h-full w-full cursor-zoom-in text-left"
-          >
-            <img
-              src={url}
-              alt={`${display.title} ${display.indexLabel}`}
-              className="h-full w-full object-contain transition duration-300 group-hover:scale-[1.02]"
-            />
-          </button>
-
-          <button
-            type="button"
-            onClick={(event) => event.stopPropagation()}
-            className="absolute right-2 top-2 z-10 rounded-full bg-black/70 px-2.5 py-1 text-[10px] text-white transition hover:bg-black"
-          >
-            重新生成
-          </button>
-
-          <div className="absolute bottom-2 right-2 z-10 flex gap-1.5">
+          {isPreviewPlaceholder ? (
+            <div className="flex h-full min-h-[280px] flex-col items-center justify-center bg-[#ececee] px-6 text-center">
+              <p className="text-sm font-medium text-black/55">预览任务，尚未真实出图</p>
+            </div>
+          ) : (
             <button
               type="button"
-              onClick={(event) => event.stopPropagation()}
-              className="rounded-full bg-black/70 px-2.5 py-1 text-[10px] font-medium text-white transition hover:bg-black"
+              onClick={() => onPreview(index)}
+              className="block h-full w-full cursor-zoom-in text-left"
             >
-              下载
+              <img
+                src={imageUrl}
+                alt={`${title} ${indexLabel}`}
+                className="h-full w-full object-contain transition duration-300 group-hover:scale-[1.02]"
+              />
             </button>
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                onPreview(index);
-              }}
-              className="rounded-full bg-black/70 px-2.5 py-1 text-[10px] font-medium text-white transition hover:bg-black"
-            >
-              放大
-            </button>
-          </div>
+          )}
+
+          {!isPreviewPlaceholder && (
+            <>
+              <button
+                type="button"
+                onClick={(event) => event.stopPropagation()}
+                className="absolute right-2 top-2 z-10 rounded-full bg-black/70 px-2.5 py-1 text-[10px] text-white transition hover:bg-black"
+              >
+                重新生成
+              </button>
+
+              <div className="absolute bottom-2 right-2 z-10 flex gap-1.5">
+                <button
+                  type="button"
+                  onClick={(event) => event.stopPropagation()}
+                  className="rounded-full bg-black/70 px-2.5 py-1 text-[10px] font-medium text-white transition hover:bg-black"
+                >
+                  下载
+                </button>
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onPreview(index);
+                  }}
+                  className="rounded-full bg-black/70 px-2.5 py-1 text-[10px] font-medium text-white transition hover:bg-black"
+                >
+                  放大
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </article>
@@ -2544,33 +1206,20 @@ function ResultImageCard({
 }
 
 function Results({
-  images,
-  generatedImages,
-  imageUrls,
-  imageUrl,
-  modelName,
+  frontendResult,
   aspectRatio,
-  directorPlan,
-  productAnalysis,
   onRegenerate,
   onPreview,
 }: {
-  images?: string[];
-  generatedImages?: string[];
-  imageUrls?: string[];
-  imageUrl?: string;
-  modelName: string;
+  frontendResult: FrontendResult;
   aspectRatio: string;
-  directorPlan?: DirectorPlan | null;
-  productAnalysis?: ProductAnalysis | null;
   onRegenerate: () => void;
   onPreview: (i: number) => void;
 }) {
-  const displayImages = resolveResultImages({ images, generatedImages, imageUrls, imageUrl });
-  const actualImageCount = displayImages.length || 1;
-  const activeDirectorPlan = resolveActiveDirectorPlan(directorPlan ?? null, productAnalysis ?? null);
+  const images = Array.isArray(frontendResult.images) ? frontendResult.images : [];
+  const summaryItems = readSummaryItems(frontendResult.summary);
   const aspectClass = getResultAspectClass(aspectRatio);
-  const isSingleResult = displayImages.length === 1;
+  const isSingleResult = images.length === 1;
 
   return (
     <div className="mx-auto max-w-6xl">
@@ -2579,25 +1228,19 @@ function Results({
           <p className="text-sm text-black/35">Oviraq AI · 生成结果</p>
           <h2 className="mt-2 text-3xl font-semibold">商业视觉生成结果</h2>
           <div className="mt-4 flex flex-wrap gap-2">
-            {[
-              `已生成 ${actualImageCount} 张`,
-              `模型 ${modelName}`,
-              "平台 淘宝",
-              `尺寸 ${aspectRatio}`,
-              "耗时 12 秒",
-              "消耗 4 积分",
-            ].map((item) => (
-              <span
-                key={item}
-                className="rounded-full bg-[#f4f4f5] px-3 py-1.5 text-xs text-black/70"
-              >
+            {summaryItems.map((item) => (
+              <span key={item} className="rounded-full bg-[#f4f4f5] px-3 py-1.5 text-xs text-black/70">
                 {item}
               </span>
             ))}
+            <span className="rounded-full bg-[#f4f4f5] px-3 py-1.5 text-xs text-black/70">
+              已生成 {images.length} 张
+            </span>
+            <span className="rounded-full bg-[#f4f4f5] px-3 py-1.5 text-xs text-black/70">
+              尺寸 {aspectRatio}
+            </span>
           </div>
-          <p className="mt-3 text-black/45">
-            已生成 {actualImageCount} 张符合平台策略的商业视觉内容
-          </p>
+          <p className="mt-3 text-black/45">已生成 {images.length} 张符合平台策略的商业视觉内容</p>
         </div>
         <button
           type="button"
@@ -2616,21 +1259,15 @@ function Results({
               : "grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3"
           }
         >
-          {displayImages.map((url, index) => {
-            const display = getResultCardDisplay(index, activeDirectorPlan);
-
-            return (
-              <ResultImageCard
-                key={`${url}-${index}`}
-                url={url}
-                index={index}
-                display={display}
-                aspectClass={aspectClass}
-                isPrimary={index === 0}
-                onPreview={onPreview}
-              />
-            );
-          })}
+          {images.map((image, index) => (
+            <ResultImageCard
+              key={`result-${index}`}
+              image={image}
+              index={index}
+              aspectClass={aspectClass}
+              onPreview={onPreview}
+            />
+          ))}
         </div>
       </div>
     </div>
