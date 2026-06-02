@@ -400,7 +400,7 @@ export default function Home() {
 
     const formData = buildAnalyzeFormData();
     formData.append("productPlanJson", JSON.stringify(productPlan));
-    formData.append("realRun", "false");
+    formData.append("realRun", "true");
 
     try {
       const res = await fetch(`${API_BASE}/generate`, {
