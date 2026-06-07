@@ -727,7 +727,11 @@ export default function Home() {
           )}
           {stage === "analyzing" && <Analyzing step={analyzingStep} />}
           {stage === "analysis" && customerView && (
-            <CustomerViewPreview customerView={customerView} warning={analysisError} />
+            <CustomerViewPreview
+              customerView={customerView}
+              productPlan={productPlan}
+              warning={analysisError}
+            />
           )}
           {stage === "generating" && <Generating onCancel={handleCancelGenerate} />}
           {stage === "results" && frontendResult && (
@@ -967,11 +971,89 @@ function AnalysisSection({
   );
 }
 
+function getCustomerIntentDisplayView(
+  productPlan: ProductPlan | null | undefined
+): Record<string, unknown> | null {
+  if (!productPlan) return null;
+  const customerIntent = asRecord(productPlan.customerIntent);
+  if (!customerIntent) return null;
+  return asRecord(customerIntent.displayView);
+}
+
+function readStringList(value: unknown): string[] {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? [trimmed] : [];
+  }
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (typeof item !== "string") return [];
+    const trimmed = item.trim();
+    return trimmed ? [trimmed] : [];
+  });
+}
+
+function readDisplaySections(displayView: Record<string, unknown>): Record<string, unknown>[] {
+  if (!Array.isArray(displayView.sections)) return [];
+  return displayView.sections
+    .map((section) => asRecord(section))
+    .filter((section): section is Record<string, unknown> => section !== null);
+}
+
+function CustomerIntentDisplayView({ productPlan }: { productPlan: ProductPlan | null }) {
+  const displayView = getCustomerIntentDisplayView(productPlan);
+  if (!displayView) return null;
+
+  const summaryItems = readStringList(displayView.summary);
+  const sections = readDisplaySections(displayView);
+  if (summaryItems.length === 0 && sections.length === 0) return null;
+
+  return (
+    <AnalysisSection title="客户输入理解">
+      <div className="space-y-4 md:col-span-2">
+        <p className="text-xs leading-5 text-black/35">
+          这部分只用于分析确认，不直接参与生图指令。真正进入生图前，仍需要统一成最终生成合同。
+        </p>
+        {summaryItems.length > 0 && (
+          <AnalysisField label="摘要">
+            <ul className="list-disc space-y-1 pl-4">
+              {summaryItems.map((item, index) => (
+                <li key={`customer-intent-summary-${index}`}>{item}</li>
+              ))}
+            </ul>
+          </AnalysisField>
+        )}
+        {sections.map((section, index) => {
+          const title = readString(section.title ?? section.label ?? section.name);
+          const items = readStringList(section.items);
+          const label = title || `理解项 ${index + 1}`;
+
+          return (
+            <AnalysisField key={`customer-intent-section-${index}`} label={label}>
+              {items.length > 0 ? (
+                <ul className="list-disc space-y-1 pl-4">
+                  {items.map((item, itemIndex) => (
+                    <li key={`customer-intent-item-${index}-${itemIndex}`}>{item}</li>
+                  ))}
+                </ul>
+              ) : (
+                DISPLAY_EMPTY
+              )}
+            </AnalysisField>
+          );
+        })}
+      </div>
+    </AnalysisSection>
+  );
+}
+
 function CustomerViewPreview({
   customerView,
+  productPlan,
   warning,
 }: {
   customerView: CustomerView;
+  productPlan?: ProductPlan | null;
   warning?: string | null;
 }) {
   return (
@@ -1010,6 +1092,8 @@ function CustomerViewPreview({
           <AnalysisField label="事实安全">{renderCustomerContent(customerView.factSafety)}</AnalysisField>
         </div>
       </AnalysisSection>
+
+      <CustomerIntentDisplayView productPlan={productPlan ?? null} />
     </div>
   );
 }
